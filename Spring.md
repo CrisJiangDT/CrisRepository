@@ -1286,3 +1286,104 @@ public class AccountDaoImpl implements IAccountDao {
 结果：回滚成功，事务控制成功
 
 - 上述解决方案可以实现事务控制，但过于繁琐，且仍然存在**方法间的依赖（改变一个方法名，则其他调用该方法的位置都需要修改）**
+
+---
+
+#### 动态代理 ####
+
+- **动态代理的作用：在不修改源码的基础上，对方法进行增强**
+- 动态代理的特点：字节码随用随创建，随用随加载
+- 动态代理分为：
+ - **基于接口的动态代理：需要被代理类至少有一个实现接口**
+ - **基于子类的动态代理：被代理类可以没有实现接口**
+
+###### 基于接口的动态代理 ######
+
+ 1. 被代理类FactoryImpl，实现了接口IFactory：
+```
+public class FactoryImpl implements IFactory {
+    public void produce(String goods, float price) { System.out.println("生产" + goods + "，成本为" + price); }
+
+    public void sale(String goods, float price) { System.out.println("销售" + goods + "，成本为" + price); }
+}
+```
+ 2. 基于接口动态代理过程：
+```
+    public static void main(String[] args) {
+        // 被代理对象
+        final FactoryImpl factory = new FactoryImpl();  // 由于内部类要访问factory，因此需要final
+
+        // 代理对象，通过Proxy.newInstance()方法创建（参数分别是：类加载器、被代理对象实现的接口、InvocationHandler实现类）
+        IFactory proxyFactory = (IFactory) Proxy.newProxyInstance(FactoryImpl.class.getClassLoader(),
+                factory.getClass().getInterfaces(),
+                new InvocationHandler() {   // 匿名内部类实现InvocationHandler
+                    /**
+                     * @param proxy     代理对象的引用（一般用不上）
+                     * @param method    调用的方法
+                     * @param args      调用方法的参数
+                     * @return          和被代理对象有相同的返回值
+                     */
+                    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                        // 增强代码（price乘以0.8）
+                        float price = (Float) args[1];
+                        price *= 0.8f;
+
+                        return method.invoke(factory, args[0], price);  // 是被代理对象factory调用方法，而不是代理对象proxy
+                    }
+                });
+
+        proxyFactory.produce("运动鞋", 500);	// 生产运动鞋，成本为400.0
+        proxyFactory.sale("运动鞋", 1000);	// 销售运动鞋，成本为800.0
+    }
+```
+
+- 注意事项：
+ 1. **代理对象的类型应该是被代理对象实现的接口的类型，才能调用该接口的方法**
+ 2. `Proxy.newInstance()`方法的参数依次是：类加载器（用被代理类的类加载器，是固定写法）、接口数组（被代理类实现的接口数组，是固定写法）、InvocationHandler接口的实现类（一般用匿名内部类的形式，要实现invoke()方法）
+ 3. InvocationHandler接口的invoke()方法的参数含义依次是：`Object proxy`是代理对象的引用（一般用不上）、`Method method`是当前执行的方法、`Object[] args`是当前执行方法的参数
+ 4. InvocationHandler接口的invoke()方法的返回值是通过反射调用被代理对象的method方法的返回值，如`return method.invoke(factory, args);`，**注意是被代理对象factory调用method方法，而不是代理对象proxy调用**。同时，**内部类中引用外部类的成员时，该成员需要加final**
+
+###### 基于子类的动态代理 ######
+
+ 1. 需要在pom.xml中**添加cglib的依赖**
+ 2. 被代理类Factory，没有实现任何接口：
+```
+public class Factory {
+    public void produce(String goods, float price) { System.out.println("生产" + goods + "，成本为" + price); }
+
+    public void sale(String goods, float price) { System.out.println("销售" + goods + "，成本为" + price); }
+}
+```
+ 3. 基于子类的动态代理过程：
+```
+    public static void main(String[] args) {
+        // 被代理对象
+        final Factory factory = new Factory();  // 由于内部类要访问factory，因此需要final
+
+        // 被代理对象，用Enhancer.create()方法创建（参数分别是：被代理对象的字节码、Callback的实现类，一般实现其子接口MethodInterceptor）
+        Factory proxyFactory = (Factory) Enhancer.create(Factory.class, new MethodInterceptor() {
+            /**
+             * @param o             代理对象的引用（一般不用）
+             * @param method        当前执行的方法
+             * @param objects       当前执行方法的参数
+             * @param methodProxy   当前执行方法的代理（一般不用）
+             * @return 和被代理对象执行方法中的返回值相同
+             */
+            @Override
+            public Object intercept(Object o, Method method, Object[] objects, MethodProxy methodProxy) throws Throwable {
+                // 增强代码（price乘以0.9）
+                float price = (Float) objects[1];
+                price *= 0.8f;
+
+                return method.invoke(factory, objects[0], price);   // 被代理对象调用method方法，并指定参数
+            }
+        });
+
+        proxyFactory.produce("篮球鞋", 1000);	// 生产篮球鞋，成本为900.0
+        proxyFactory.sale("篮球鞋", 1500);	// 销售篮球鞋，成本为1350.0
+    }
+```
+
+- 注意事项：
+ - **代理对象的类型应该和被代理对象相同**
+ - Enhancer.create()方法的参数依次是：字节码（被代理对象的字节码，固定写法）、Callback接口的实现类（一般写其子接口MethodInterceptor的实现类）
