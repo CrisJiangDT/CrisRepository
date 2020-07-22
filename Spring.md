@@ -716,7 +716,7 @@ public class AccountServiceImpl implements IAccountService {
 
 - 实现三层架构，持久层选用DBUtils
 - 步骤：
- 1. pom.xml中导入Spring、MySQL、DBUtils、C3P0连接池、junit、**javax.annotation-api**的依赖：
+ 1. pom.xml中导入Spring-Context、MySQL、DBUtils、C3P0连接池、junit、**javax.annotation-api**的依赖：
 ```
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -1065,7 +1065,7 @@ public class TestAccountService {
 
 ---
 
-#### 事务控制问题 ####
+#### 案例：转账的事务控制 ####
 
 - 转账业务暴露出的事务控制问题
 
@@ -1285,7 +1285,7 @@ public class AccountDaoImpl implements IAccountDao {
 ```
 结果：回滚成功，事务控制成功
 
-- 上述解决方案可以实现事务控制，但过于繁琐，且仍然存在**方法间的依赖（改变一个方法名，则其他调用该方法的位置都需要修改）**
+- 上述解决方案可以实现事务控制，但**过于繁琐（Service中每个方法都要添加事务控制）**，且仍然存在**方法间的依赖（改变一个方法名，则其他调用该方法的位置都需要修改）**，下面用动态代理来解决
 
 ---
 
@@ -1294,8 +1294,8 @@ public class AccountDaoImpl implements IAccountDao {
 - **动态代理的作用：在不修改源码的基础上，对方法进行增强**
 - 动态代理的特点：字节码随用随创建，随用随加载
 - 动态代理分为：
- - **基于接口的动态代理：需要被代理类至少有一个实现接口**
- - **基于子类的动态代理：被代理类可以没有实现接口**
+ - **基于接口的动态代理**
+ - **基于子类的动态代理**
 
 ###### 基于接口的动态代理 ######
 
@@ -1307,7 +1307,7 @@ public class FactoryImpl implements IFactory {
     public void sale(String goods, float price) { System.out.println("销售" + goods + "，成本为" + price); }
 }
 ```
- 2. 基于接口动态代理过程：
+ 2. 基于接口的动态代理过程：
 ```
     public static void main(String[] args) {
         // 被代理对象
@@ -1385,5 +1385,2050 @@ public class Factory {
 ```
 
 - 注意事项：
- - **代理对象的类型应该和被代理对象相同**
+ - **代理对象的类型应该指定为被代理对象的类型**
  - Enhancer.create()方法的参数依次是：字节码（被代理对象的字节码，固定写法）、Callback接口的实现类（一般写其子接口MethodInterceptor的实现类）
+ - MethodInterceptor接口的intercept()方法的参数含义依次是：`Object o`是代理对象的引用（一般用不上）、`Method method`是当前执行的方法，`Object[] objects`是当前执行方法的参数、`MethodProxy methodProxy`是当前执行方法的代理（一般用不上）
+ - MethodInterceptor接口的intercept()方法的返回值是通过反射调用被代理对象的method方法的返回值，如`return method.invoke(factory, objects);`，**注意是被代理对象factory调用method方法，而不是代理对象proxy调用**。同时，**内部类中引用外部类的成员时，该成员需要加final**
+
+---
+
+#### 案例：动态代理实现转账的事务控制 ####
+
+- 在上面有事务控制的代码中，Service的每个多操作方法都要添加事务控制，代码冗余且繁琐，同时，方法间耦合太强（某个方法名一改，则大片报错，维护困难），考虑用动态代理将IAccountService进行增强，实现事务控制
+- 步骤：
+ 1. AccountServiceImpl中不需要再有TransactionManager类，且其方法中不用再进行事务控制，因为这块任务交给了动态代理的代理对象：
+```
+public class AccountServiceImpl implements IAccountService {
+    private IAccountDao accountDao;
+
+    public void setAccountDao(IAccountDao accountDao) { this.accountDao = accountDao; }
+
+    @Override
+    public void transfer(int sourceId, int targetId, double money) {
+            Account source = accountDao.findById(sourceId);
+            Account target = accountDao.findById(targetId);
+            source.setMoney(source.getMoney() - money);
+            target.setMoney(target.getMoney() + money);
+            accountDao.update(source);
+            int i = 1 / 0;   // 抛出异常
+            accountDao.update(target);
+    }
+
+	...
+}
+```
+ 2. 创建BeanFactory工厂类，用于通过动态代理获取代理对象ProxyAccountService，由于需要增强IAccountService，且需要进行事务控制，因此需要注入IAccountServic和TransactionManager属性：
+```
+public class BeanFactory {
+    // 需要注入的属性
+    private IAccountService accountService; // IAccountService的实现类，即被代理对象
+    private TransactionManager transactionManager;  // 事务管理类
+
+    public void setAccountService(IAccountService accountService) { this.accountService = accountService; }
+
+    public void setTransactionManager(TransactionManager transactionManager) { this.transactionManager = transactionManager; }
+
+    /**
+     * 用于获取IAccountService实现类的动态代理对象，在AccountServiceImpl基础上支持事务操作
+     * @return IAccountService实现类的动态代理对象
+     */
+    public IAccountService createProxyAccountService() {
+        IAccountService proxyAccountService = (IAccountService) Proxy.newProxyInstance(
+                accountService.getClass().getClassLoader(), accountService.getClass().getInterfaces(),
+                new InvocationHandler() {
+                    @Override
+                    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                        try {
+                            transactionManager.beginTransaction();
+                            Object returnVal = method.invoke(accountService, args);
+                            transactionManager.commitTransaction();
+                            return returnVal;
+                        } catch (Exception e) {
+                            transactionManager.rollbackTransaction();
+                            throw new RuntimeException(e);
+                        } finally {
+                            transactionManager.release();
+                        }
+                    }
+                });
+        return proxyAccountService;
+    }
+}
+```
+ 3. 在bean.xml中进行配置，其中需要新配置BeanFactory、ProxyAccountService，且Service中不用再注入TransactionManager：
+```
+    <!-- 配置BeanFactory -->
+    <bean id="beanFactory" class="accountWithDynamicProxy.utils.BeanFactory">
+        <property name="accountService" ref="accountService"/>
+        <property name="transactionManager" ref="transactionManager"/>
+    </bean>
+
+    <!-- 配置代理对象ProxyAccountService -->
+    <bean id="proxyAccountService" factory-bean="beanFactory" factory-method="createProxyAccountService"/>
+
+    <!-- 配置Service -->
+    <bean id="accountService" class="accountWithDynamicProxy.service.impl.AccountServiceImpl">
+        <property name="accountDao" ref="accountDao"/>
+    </bean>
+
+    <!-- 配置DAO -->
+    <bean id="accountDao" class="accountWithDynamicProxy.dao.impl.AccountDaoImpl">
+        <property name="runner" ref="runner"/>
+        <property name="connectionUtils" ref="connectionUtils"/>
+    </bean>
+
+    <!-- 配置TransactionManager -->
+    <bean id="transactionManager" class="accountWithDynamicProxy.utils.TransactionManager">
+        <property name="connectionUtils" ref="connectionUtils"/>
+    </bean>
+
+    <!-- 配置ConnectionUtils -->
+    <bean id="connectionUtils" class="accountWithDynamicProxy.utils.ConnectionUtils">
+        <property name="dataSource" ref="dataSource"/>
+    </bean>
+
+    <!-- 配置QueryRunner，在QueryRunner中不用再配置DataSource -->
+    <bean id="runner" class="org.apache.commons.dbutils.QueryRunner" scope="prototype"/>
+
+    <!-- 配置数据源DataSource -->
+    <bean id="dataSource" class="com.mchange.v2.c3p0.ComboPooledDataSource">
+        <!-- 注入JDBC四大参数 -->
+        <property name="driverClass" value="com.mysql.jdbc.Driver"/>
+        <property name="jdbcUrl" value="jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Shanghai"/>
+        <property name="user" value="Cris"/>
+        <property name="password" value="123"/>
+    </bean>
+```
+ 4. 从核心容器中获取ProxyAccountService进行测试：
+```
+    /**
+     * 测试代理对象ProxyAccountService的transfer()方法（会报错回滚）
+     */
+    @Test
+    public void testTransfer() {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        IAccountService proxyAccountService = ac.getBean("proxyAccountService", IAccountService.class);
+        proxyAccountService.transfer(2, 1, 100);
+    }
+```
+结果：事务回滚成功
+
+---
+
+### AOP ###
+
+- 上面用动态代理解决事务控制问题，虽然可以实现，但写起来也麻烦，**Spring可以通过配置的方式来实现上面的做法**，这就是AOP
+- **AOP（Aspect Oriented Programming，面向切面编程）**，简单地说就是将程序中重复的代码抽取出来，**提高可重用性，降低耦合性**，在需要执行的时候，再使用**动态代理技术**，在不修改源码的基础上进行增强
+- AOP的作用：在程序运行期间，不修改源码对已有方法进行增强
+- AOP的好处：
+ - 减少重复代码
+ - 提高开发效率
+ - 便于维护
+- AOP的实现方式：动态代理技术
+
+###### AOP中的一些专业术语 ######
+
+- 连接点（Jointpoint）：被拦截的点，即被代理类中的所有方法
+- 切入点（Pointcut）：被拦截且被增强的点，即被代理类中被增强的方法
+ - 切入点一定是连接点，连接点不一定是切入点（可能会通过判断方法名来过滤掉一些不需要增强的方法）
+- 通知/增强（Advice）：拦截到JointPoint后要做的事就是“通知”（Advice），其实就是增强的代码，“通知”（Advice）又分为：
+ - 前置通知（在`method.invoke()`前面的代码）
+ - 后置通知（在`method.invoke()`后面的代码）
+ - 异常通知（在`catch{}`里面的代码）
+ - 最终通知（在`finally{}`里面的代码）
+ - 环绕通知（InvocationHandler接口的实现类的整个invoke()方法，**环绕通知里面会有明确的切入点的调用`method.invoke()`**）
+- 目标对象（Target）：被代理对象
+- 织入（Waving）：创建代理对象来增强被代理对象的过程
+- 代理（Proxy）：代理对象
+- 切面（Aspect）：切入点Jointpoint和通知Advice的结合
+
+###### Spring的AOP中的分工 ######
+
+- 开发人员要做的事：
+ 1. 编写核心业务代码（如上面Account案例的增删改查以及事务控制）
+ 2. 将公用代码抽取出来，制作成“通知”（Advice）（如抽取上面Account案例的事务控制代码，作为“通知”，即要用动态代理进行增强的部分）
+ 3. 在配置文件中，声明切入点与“通知”之间的关系，即切面（如上面Account案例的transfer()方法需要进行事务控制，而其他只与数据库进行一次交互操作的方法则不用）
+- **运行阶段Spring所能完成的事：**
+ - Spring可以**监控切入点方法的执行，一旦监视到切入方法运行，则会使用动态代理机制创建代理对象，并根据“通知”类别，按顺序地将“通知”对应的功能织入，完成完整的代码逻辑运行**
+
+#### Spring基于XML的AOP入门案例 ####
+
+- 步骤：
+ 1. 在pom.xml中导入Spring-Context、**AspectJ Waver（用于监控切入点方法，并在切入点方法执行时将“通知”织入）**和junit的依赖：
+```
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+            <version>1.9.5</version>
+        </dependency>
+
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.12</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+```
+ 2. 模拟Service层的IAccountService接口，其中有三个参数类型和返回值不同的方法：
+```
+public interface IAccountService {
+    /**
+     * 无参无返回值的方法
+     */
+    void method1();
+
+    /**
+     * 无参有返回值的方法
+     */
+    int method2();
+
+    /**
+     * 有参无返回值的方法
+     */
+    void method3(int arg);
+
+    /**
+     * 有两个参数的方法
+     */
+    void method4(int arg1, String arg2);
+}
+```
+ 3. 模拟Service层的实现类AccountServiceImpl：
+```
+public class AccountServiceImpl implements IAccountService {
+    public void method1() { System.out.println("method1()方法执行了..."); }
+
+    public int method2() {
+        System.out.println("method2()方法执行了...");
+        return 0;
+    }
+
+    public void method3(int arg) { System.out.println("method3()方法执行了..."); }
+
+    public void method4(int arg1, String arg2) { System.out.println("method4()方法执行了"); }
+}
+```
+ 4. 创建Logger类，用于提供增强代码（“通知Bean”）：
+```
+public class Logger {
+    /**
+     * 前置通知
+     */
+    public void beforeLogger() {
+        System.out.println("前置通知执行啦");
+    }
+}
+```
+ 5. 配置bean.xml：
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:aop="http://www.springframework.org/schema/aop"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+        https://www.springframework.org/schema/beans/spring-beans.xsd
+        http://www.springframework.org/schema/aop
+        https://www.springframework.org/schema/aop/spring-aop.xsd">
+    <!-- 注意要引入包含AOP标签的约束 -->
+
+    <!-- 配置Service -->
+    <bean id="accountService" class="pers.cris.service.impl.AccountServiceImpl"/>
+
+    <!-- 配置“通知Bean” Logger -->
+    <bean id="logger" class="pers.cris.utils.Logger"/>
+
+    <!-- 开始配置AOP -->
+    <aop:config>
+        <!-- 开始配置切面，ref属性指定“通知Bean” -->
+        <aop:aspect id="logAdvice" ref="logger">
+            <!-- 通过具体标签指定“通知”类型，并且建立“通知”方法和切入点方法之间的关联
+                 method属性：指定“通知Bean”中的增强方法
+                 pointcut属性：指定切入点，切入点表达式规范：execution(访问修饰符 返回值类型 包名.类名.方法名(参数列表))
+            -->
+            <aop:before method="beforeLogger"
+                        pointcut="execution(public void pers.cris.service.impl.AccountServiceImpl.method1())"/>
+        </aop:aspect>
+    </aop:config>
+</beans>
+```
+ 6. 测试：
+```
+    @Test
+    public void testAOP() {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        IAccountService accountService = ac.getBean("accountService", IAccountService.class);
+        accountService.method1();
+        accountService.method2();
+        accountService.method3(0);
+        accountService.method4(0, "0");
+    }
+```
+测试结果：
+```
+前置通知执行啦~
+method1()方法执行了...
+method2()方法执行了...
+method3()方法执行了...
+method4()方法执行了...
+```
+即切入点method1()执行前，会先执行前置通知；而非切入点method2()、method3()则不会
+
+###### 注意事项 ######
+
+ 1. bean.xml中想要用AOP的标签，需要引入包含AOP标签的XML约束
+ 2. **`<aop:config>`标签表明开始配置AOP**
+ 3. `<aop:config>`标签的子标签**`<aop:aspect>`配置切面**，其id属性是该切面的唯一标识，**ref属性用于引用配置好的“通知Bean”**
+ 4. `<aop:aspect>`的不同子标签用于配置不同类型的“通知”，并**建立“通知”方法和切入点方法之间的关联**，如`<aop:before>`标签用于配置前置通知，其**method属性指定“通知Bean”中的方法作为增强代码执行的方法，pointcut属性用于指定切入点，切入点表达式的规范写法为：`execution(访问修饰符 返回值类型 包名.类名.方法名(参数列表))`**
+
+###### 切入点表达式 ######
+
+- 切入点表达式
+ - 规范写法为：`execution(访问修饰符 返回值类型 包名.类名.方法名(参数列表))`，如`execution(public void pers.cris.service.impl.AccountServiceImpl.method3(int))`
+ - **访问修饰符可以省略**，例如`execution(void pers.cris.service.impl.AccountServiceImpl.method3(int))`
+ - **返回值类型可以使用通配符`*`**，例如`execution(* pers.cris.service.impl.AccountService.method3(int))`
+ - 包名可以使用通配符`*`，但有几级就要写几级，例如`exection(* *.*.*.*.AccountServiceImpl.method3(int))`
+ - 包名可以用`..`表示当前包及其子包，例如`execution(* *..AccountServiceImpl.method3(int))`
+ - **类名和方法名可以使用通配符`*`**，例如`exection(* *..*.*(int))`
+ - 参数列表中，基本数据类型可以直接写（如`int`、`char`），引用数据类型需要写`包名.类名`，（如`java.lang.String`）
+ - 参数列表可以使用通配符`*`，但使用的话则必须有参数，例如`execution(* *..*.*(*))`
+ - **参数列表可以使用`..`表示有无参数均可，有几个参数均可，任意类型参数均可**，例如`execution(* *..*.*(..))`
+ - **实际开发中，切入点表达式一般定位到业务层实现类下的所有方法，例如`execution(* pers.cris.service.impl.*.*(..))`**
+- **配置切入点表达式：`<aop:pointcut>`标签**，id属性为该切入点表达式的唯一标识，**expression属性指定切入点表达式**
+ - 若`<aop:pointcut>`写在`<aop:aspect>`标签内部，则该切入点表达式只有该切面可以引用
+ - 若`<aop:pointcut>`写在`<aop:aspect>`标签外部，则该切入点表达式所有切面都可以引用，但切面的声明必须在切入点表达式声明的后面
+
+###### 四种常用通知的标签 ######
+
+- `<aop:aspect>`的四个子标签分别用于配置四种常用通知，它们的method属性指定“通知Bean”中的增强方法，**pointcut属性指定切入点表达式，pointcut-ref属性指定切入点表达式的引用**
+ - 前置通知：`<aop:before>`
+ - 后置通知：`<aop:after-returning>`
+ - 异常通知：`<aop:after-throwing>`
+ - 最终通知：`<aop:after>`
+- 其中，**后置通知和异常通知，永远只有一个会执行**
+
+ “通知Bean”中的内容：
+```
+public class Logger {
+    /**
+     * 前置通知
+     */
+    public void beforeLogger() { System.out.println("前置通知执行啦~"); }
+
+    /**
+     * 后置通知
+     */
+    public void afterReturningLogger() { System.out.println("后置通知执行啦~"); }
+
+    /**
+     * 异常通知
+     */
+    public void afterThrowingLogger() { System.out.println("异常通知执行啦~"); }
+
+    /**
+     * 最终通知
+     */
+    public void afterLogger() { System.out.println("最终通知执行啦~"); }
+}
+```
+
+ bean.xml中AOP的配置：
+```
+    <!-- 配置“通知Bean” Logger -->
+    <bean id="logger" class="pers.cris.utils.Logger"/>
+
+    <aop:config>
+        <aop:aspect id="logAdvice" ref="logger">
+            <!-- 配置切入点表达式 -->
+            <aop:pointcut id="pt1" expression="execution(* pers.cris.service.impl.*.*(..))"/>
+            <aop:before method="beforeLogger" pointcut-ref="pt1"/>  <!-- 前置通知 -->
+            <aop:after-returning method="afterReturningLogger" pointcut-ref="pt1"/> <!-- 后置通知 -->
+            <aop:after-throwing method="afterThrowingLogger" pointcut-ref="pt1"/>   <!-- 异常通知 -->
+            <aop:after method="afterLogger" pointcut-ref="pt1"/>    <!-- 最终通知 -->
+        </aop:aspect>
+    </aop:config>
+```
+
+ 测试：
+```
+    @Test
+    public void testAOP() {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        IAccountService accountService = ac.getBean("accountService", IAccountService.class);
+        accountService.method1();
+	}
+```
+
+ 输出：
+```
+前置通知执行啦~
+method1()方法执行了...
+后置通知执行啦~
+最终通知执行啦~
+```
+
+###### 环绕通知 ######
+
+- **环绕通知**是Spring给我们提供的一种**可以在代码中手动控制增强方法何时执行**的方式，即**环绕通知可以配置其他四种通知**
+- **环绕通知里面需要有切入点方法的调用，否则切入点方法不会执行**
+- **ProceedingJoinPoint接口可以作为环绕通知方法的参数，其proceed()方法就相当于调用切入点方法**
+- bean.xml中配置环绕通知的标签是`<aop:around>`
+
+ “通知Bean”中的内容：
+```
+public class Logger {
+    /**
+     * 环绕通知，需要有明确的切入点方法调用
+     *      ProceedingJoinPoint接口可以作为环绕通知方法的参数，其proceed()方法就相当于调用切入点方法
+     */
+    public Object aroundLogger(ProceedingJoinPoint pjp) {
+        try {
+            System.out.println("环绕通知执行啦~ 作为前置通知");
+
+            Object[] args = pjp.getArgs();  // 获取切入点方法的参数
+            Object returnVal = pjp.proceed(args);// 调用切入点方法
+            System.out.println("环绕通知执行啦~ 作为后置通知");
+
+            return returnVal;   // 返回切入点方法的返回值
+        } catch (Throwable t) { // Exception拦不住，要捕获Throwable
+            System.out.println("环绕通知执行啦~ 作为异常通知");
+            t.printStackTrace();
+        } finally {
+            System.out.println("环绕通知执行啦~ 作为最终通知");
+        }
+        return null;
+    }
+
+	...
+}
+```
+
+ bean.xml中环绕通知的配置：
+```
+    <!-- 配置“通知Bean” Logger -->
+    <bean id="logger" class="pers.cris.utils.Logger"/>
+
+    <aop:config>
+        <aop:aspect id="logAdvice" ref="logger">
+            <!-- 配置切入点表达式 -->
+            <aop:pointcut id="pt1" expression="execution(* pers.cris.service.impl.*.*(..))"/>
+            <!-- 配置环绕通知 -->
+            <aop:around method="aroundLogger" pointcut-ref="pt1"/>
+        </aop:aspect>
+    </aop:config>
+```
+
+ 测试：
+```
+    @Test
+    public void testAOP() {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        IAccountService accountService = ac.getBean("accountService", IAccountService.class);
+        accountService.method1();
+    }
+```
+
+ 输出：
+```
+环绕通知执行啦~ 作为前置通知
+method1()方法执行了...
+环绕通知执行啦~ 作为后置通知
+环绕通知执行啦~ 作为最终通知
+```
+
+---
+
+#### Spring基于注解的AOP配置 ####
+
+- 步骤：
+ 1. 在pom.xml中导入Spring-Contex、AspectJ Waver（用于监控切入点方法，并在切入点方法执行时将“通知”织入）和junit的依赖
+ 2. 在bean.xml中**配置创建核心容器时要扫描的包**，并**配置开启注解AOP的支持**：
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:aop="http://www.springframework.org/schema/aop"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+        https://www.springframework.org/schema/beans/spring-beans.xsd
+        http://www.springframework.org/schema/aop
+        https://www.springframework.org/schema/aop/spring-aop.xsd
+        http://www.springframework.org/schema/context
+        https://www.springframework.org/schema/context/spring-context.xsd">
+    <!-- 注意要引入包含AOP标签和context标签的约束 -->
+
+    <!-- 配置Spring创建核心容器时要扫描的包 -->
+    <context:component-scan base-package="pers.cris"/>
+
+    <!-- 配置Spring开启注解AOP的支持 -->
+    <aop:aspectj-autoproxy/>
+</beans>
+```
+ 2. 创建Service层实现类AccountServiceImpl，并通过`@Service`注解添加到Spring核心容器中：
+```
+@Service("accountService")
+public class AccountServiceImpl implements IAccountService {
+    public void method() {
+        System.out.println("method1()方法执行了...");
+//        int i = 1 / 0;  // 抛出异常
+    }
+}
+```
+ 3. 创建切面类（通知类）Logger，并通过`@Component`注解添加到Spring核心容器中，**用`@Aspect`注解表明它是一个切面类（通知类）**，同时在里面用**`@Pointcut`配置切入点表达式，用`@Around`、`@Before`、`@AfterReturning`、`AfterThrowing`、`After`配置通知类型，并指定它们的切入点**：
+```
+@Component("logger")
+@Aspect // 表示是切面类（通知类）
+public class Logger {
+    // 配置切入点表达式
+    @Pointcut("execution(* pers.cris.service.impl.*.*(..))")
+    private void pt1() {}
+    @Around("pt1()")    // 环绕通知，并指定切入点表达式
+    public Object aroundLogger(ProceedingJoinPoint pjp) {
+        try {
+            System.out.println("环绕通知执行啦~ 作为前置通知");
+
+            Object[] args = pjp.getArgs();  // 获取切入点方法的参数
+            Object returnVal = pjp.proceed(args);// 调用切入点方法
+            System.out.println("环绕通知执行啦~ 作为后置通知");
+
+            return returnVal;   // 返回切入点方法的返回值
+        } catch (Throwable t) { // Exception拦不住，要捕获Throwable
+            System.out.println("环绕通知执行啦~ 作为异常通知");
+            t.printStackTrace();
+        } finally {
+            System.out.println("环绕通知执行啦~ 作为最终通知");
+        }
+        return null;
+    }
+
+    // @Before("pt1()")    // 前置通知，并指定切入点表达式
+    public void beforeLogger() { System.out.println("前置通知执行啦~"); }
+
+	// @AfterReturning("pt1()")    // 后置通知，并指定切入点表达式
+    public void afterReturningLogger() { System.out.println("后置通知执行啦~"); }
+
+	// @AfterThrowing("pt1()") // 异常通知，并指定切入点表达式
+    public void afterThrowingLogger() { System.out.println("异常通知执行啦~"); }
+
+	// @After("pt1()") // 最终通知，并指定切入点表达式
+    public void afterLogger() { System.out.println("最终通知执行啦~"); }
+}
+```
+ 4. 测试：
+```
+    @Test
+    public void testAOP() {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        IAccountService accountService = ac.getBean("accountService", IAccountService.class);
+        accountService.method();
+    }
+```
+
+- 也可以用**Spring配置类**的方式，直接省略bean.xml，在配置类上：
+ - 添加`@Configuration`注解指定为配置类
+ - 添加`@ComponentScan`注解指定创建核心容器时要扫描的包
+ - **添加`@EnableAspectJAutoProxy`注解配置开启注解AOP的支持**
+
+#### 案例：基于XML配置的AOP实现转账的事务控制 ####
+
+- 将上面基于动态代理的转账案例通过AOP的XML配置方式完成
+- 步骤：
+ 1. 在pom.xml中引入Spring-Context、MySQL、DBUtils、C3P0连接池、AspectJ Waver、junit的依赖：
+```
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+            <version>8.0.20</version>
+        </dependency>
+
+        <dependency>
+            <groupId>commons-dbutils</groupId>
+            <artifactId>commons-dbutils</artifactId>
+            <version>1.6</version>
+        </dependency>
+
+        <dependency>
+            <groupId>c3p0</groupId>
+            <artifactId>c3p0</artifactId>
+            <version>0.9.1.2</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+            <version>1.9.5</version>
+        </dependency>
+
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.12</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.encoding>UTF-8</maven.compiler.encoding>
+        <java.version>11</java.version>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+    </properties>
+```
+ 2. ConnectionUtils工具类，用于获取线程专属的连接、将线程与专属连接解绑，需要注入DataSource数据源：
+```
+public class ConnectionUtils {
+    private ThreadLocal<Connection> tl = new ThreadLocal<Connection>();
+
+    private DataSource dataSource;
+
+    public void setDataSource(DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
+
+    /**
+     * 获取当前线程专属的Connection
+     * @return 当前线程专属的Connection
+     */
+    public Connection getThreadConnection() {
+        try {
+            Connection connection = tl.get();
+            if (connection == null) {
+                connection = dataSource.getConnection();
+                tl.set(connection);
+            }
+            return connection;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 将当前线程与其专属的Connection解绑
+     */
+    public void removeThreadConnection() {
+        if (tl.get() != null)
+            tl.remove();
+    }
+}
+```
+ 3. TransactionManager工具类（它是**切面类/通知类**，提供增强方法），用于开启事务、提交事务、回滚事务、释放资源，需要注入ConnectionUtils：
+```
+public class TransactionManager {
+    private ConnectionUtils connectionUtils;
+
+    public void setConnectionUtils(ConnectionUtils connectionUtils) {
+        this.connectionUtils = connectionUtils;
+    }
+
+    /**
+     * 开启事务
+     */
+    public void beginTransaction() {
+        try {
+            connectionUtils.getThreadConnection().setAutoCommit(false);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 提交事务
+     */
+    public void commitTransaction() {
+        try {
+            connectionUtils.getThreadConnection().commit();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 回滚事务
+     */
+    public void rollbackTransaction() {
+        try {
+            connectionUtils.getThreadConnection().rollback();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 释放资源
+     */
+    public void release() {
+        try {
+            connectionUtils.getThreadConnection().close();
+            connectionUtils.removeThreadConnection();   // 要将线程与其专属连接解绑
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
+```
+ 4. DAO层实现类AccountDaoImpl，需要注入QueryRunner和ConnectionUtils（用于给每条SQL语句指定连接对象为当前线程专属连接对象）：
+```
+public class AccountDaoImpl implements IAccountDao {
+    private QueryRunner runner;
+    private ConnectionUtils connectionUtils;
+
+    public void setRunner(QueryRunner runner) {
+        this.runner = runner;
+    }
+
+    public void setConnectionUtils(ConnectionUtils connectionUtils) {
+        this.connectionUtils = connectionUtils;
+    }
+
+    @Override
+    public Account findById(int id) {
+        try {
+            return runner.query(connectionUtils.getThreadConnection(),
+                    "SELECT * FROM tb_account WHERE id = ?", new BeanHandler<>(Account.class), id);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Override
+    public void updateMoney(int id, double money) {
+        try {
+            runner.update(connectionUtils.getThreadConnection(),
+                    "UPDATE tb_account SET money = ? WHERE id = ?", money, id);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
+```
+ 5. Service层实现类AccountServiceImpl，需要注入DAO层实现类：
+```
+public class AccountServiceImpl implements IAccountService {
+    private IAccountDao accountDao;
+
+    public void setAccountDao(IAccountDao accountDao) {
+        this.accountDao = accountDao;
+    }
+
+    public void transfer(int sourceId, int targetId, double money) {
+        Account sourceAccount = accountDao.findById(sourceId);
+        Account targetAccount = accountDao.findById(targetId);
+        accountDao.updateMoney(sourceId, sourceAccount.getMoney() - money);
+        int i = 1 / 0;    // 抛出异常
+        accountDao.updateMoney(targetId, targetAccount.getMoney() + money);
+    }
+}
+```
+ 6. 配置bean.xml：
+```
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:aop="http://www.springframework.org/schema/aop"
+       xsi:schemaLocation="
+        http://www.springframework.org/schema/beans https://www.springframework.org/schema/beans/spring-beans.xsd
+        http://www.springframework.org/schema/aop https://www.springframework.org/schema/aop/spring-aop.xsd">
+
+    <!-- 配置Service -->
+    <bean id="accountService" class="pers.cris.service.impl.AccountServiceImpl">
+        <property name="accountDao" ref="accountDao"/>
+    </bean>
+
+    <!-- 配置DAO -->
+    <bean id="accountDao" class="pers.cris.dao.impl.AccountDaoImpl">
+        <property name="connectionUtils" ref="connectionUtils"/>
+        <property name="runner" ref="runner"/>
+    </bean>
+
+    <!-- 配置ConnectionUtils -->
+    <bean id="connectionUtils" class="pers.cris.utils.ConnectionUtils">
+        <property name="dataSource" ref="ds"/>
+    </bean>
+
+    <!-- 配置QueryRunner -->
+    <bean id="runner" class="org.apache.commons.dbutils.QueryRunner"/>
+
+    <!-- 配置DataSource -->
+    <bean id="ds" class="com.mchange.v2.c3p0.ComboPooledDataSource">
+        <property name="driverClass" value="com.mysql.jdbc.Driver"/>
+        <property name="jdbcUrl" value="jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Shanghai"/>
+        <property name="user" value="Cris"/>
+        <property name="password" value="123"/>
+    </bean>
+
+    <!-- 配置切面类/通知类TransactionManager -->
+    <bean id="transactionManager" class="pers.cris.utils.TransactionManager">
+        <property name="connectionUtils" ref="connectionUtils"/>
+    </bean>
+
+    <!-- 配置AOP -->
+    <aop:config>
+        <!-- 配置切入点 -->
+        <aop:pointcut id="pt1" expression="execution(* pers.cris.service.impl.*.*(..))"/>
+        <!-- 配置切面 -->
+        <aop:aspect ref="transactionManager">
+            <aop:before method="beginTransaction" pointcut-ref="pt1"/>
+            <aop:after-returning method="commitTransaction" pointcut-ref="pt1"/>
+            <aop:after-throwing method="rollbackTransaction" pointcut-ref="pt1"/>
+            <aop:after method="release" pointcut-ref="pt1"/>
+        </aop:aspect>
+    </aop:config>
+</beans>
+```
+ 7. 模拟表现层，调用Service层，进行测试：
+```
+public class Client {
+    public static void main(String[] args) {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        IAccountService accountService = ac.getBean("accountService", IAccountService.class);
+        accountService.transfer(1, 2, 100);
+    }
+}
+```
+事务的回滚控制成功
+
+---
+
+#### 案例：基于注解配置的AOP实现转账事务控制 ####
+
+- 将上面基于动态代理的转账案例通过AOP的注解配置方式完成
+- 步骤：
+ 1. 在pom.xml中引入Spring-Context、**javax.annotation-api**、MySQL、DBUtils、C3P0连接池、**AspectJ Waver**、junit的依赖：
+```
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+
+        <dependency>
+            <groupId>javax.annotation</groupId>
+            <artifactId>javax.annotation-api</artifactId>
+            <version>1.3.1</version>
+        </dependency>
+
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+            <version>8.0.20</version>
+        </dependency>
+
+        <dependency>
+            <groupId>commons-dbutils</groupId>
+            <artifactId>commons-dbutils</artifactId>
+            <version>1.6</version>
+        </dependency>
+
+        <dependency>
+            <groupId>c3p0</groupId>
+            <artifactId>c3p0</artifactId>
+            <version>0.9.1.2</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+            <version>1.9.5</version>
+        </dependency>
+
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.12</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.encoding>UTF-8</maven.compiler.encoding>
+        <java.version>11</java.version>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+    </properties>
+```
+ 2. ConnectionUtils工具类，用于获取线程专属的连接、将线程与专属连接解绑，需要将其配置到核心容器中，并注入DataSource数据源：
+```
+@Component("connectionUtils")
+public class ConnectionUtils {
+    private ThreadLocal<Connection> tl = new ThreadLocal<Connection>();
+
+    @Resource(name = "ds")
+    private DataSource dataSource;
+
+    /**
+     * 获取当前线程专属的Connection
+     * @return 当前线程专属的Connection
+     */
+    public Connection getThreadConnection() {
+        try {
+            Connection connection = tl.get();
+            if (connection == null) {
+                connection = dataSource.getConnection();
+                tl.set(connection);
+            }
+            return connection;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 将当前线程与其专属的Connection解绑
+     */
+    public void removeThreadConnection() {
+        if (tl.get() != null)
+            tl.remove();
+    }
+}
+```
+ 3. TransactionManager工具类（它是切面类/通知类，提供增强方法），用于开启事务、提交事务、回滚事务、释放资源，需要**将其声明为切面类**，注入ConnectionUtils，并**配置切面表达式和各个通知**：
+```
+@Component("transactionManager")
+@Aspect // 声明该类为切面类（通知类）
+public class TransactionManager {
+    @Resource(name = "connectionUtils")
+    private ConnectionUtils connectionUtils;
+
+    // 配置切入点表达式
+    @Pointcut("execution(* pers.cris.service.impl.*.*(..))")
+    private void pc1() {}
+
+    /**
+     * 开启事务
+     */
+    @Before("pc1()")    // 前置通知
+    public void beginTransaction() {
+        try {
+            connectionUtils.getThreadConnection().setAutoCommit(false);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 提交事务
+     */
+    @AfterReturning("pc1()")    // 后置通知
+    public void commitTransaction() {
+        try {
+            connectionUtils.getThreadConnection().commit();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 回滚事务
+     */
+    @AfterThrowing("pc1()") // 异常通知
+    public void rollbackTransaction() {
+        try {
+            connectionUtils.getThreadConnection().rollback();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 释放资源
+     */
+    @After("pc1()") // 最终通知
+    public void release() {
+        try {
+            connectionUtils.getThreadConnection().close();
+            connectionUtils.removeThreadConnection();   // 要将线程与其专属连接解绑
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
+```
+ 4. DAO层实现类AccountDaoImpl，需要将其配置到核心容器中，并注入QueryRunner和ConnectionUtils（用于给每条SQL语句指定连接对象为当前线程专属连接对象）：
+```
+@Repository("accountDao")
+public class AccountDaoImpl implements IAccountDao {
+    @Resource(name = "runner")
+    private QueryRunner runner;
+
+    @Resource(name = "connectionUtils")
+    private ConnectionUtils connectionUtils;
+
+    @Override
+    public Account findById(int id) {
+        try {
+            return runner.query(connectionUtils.getThreadConnection(),
+                    "SELECT * FROM tb_account WHERE id = ?", new BeanHandler<>(Account.class), id);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Override
+    public void updateMoney(int id, double money) {
+        try {
+            runner.update(connectionUtils.getThreadConnection(),
+                    "UPDATE tb_account SET money = ? WHERE id = ?", money, id);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
+```
+ 5. Service层实现类AccountServiceImpl，需要将其配置到核心容器中，并注入DAO层实现类：
+```
+@Service("accountService")
+public class AccountServiceImpl implements IAccountService {
+    @Resource(name = "accountDao")
+    private IAccountDao accountDao;
+
+    public void transfer(int sourceId, int targetId, double money) {
+        Account sourceAccount = accountDao.findById(sourceId);
+        Account targetAccount = accountDao.findById(targetId);
+        accountDao.updateMoney(sourceId, sourceAccount.getMoney() - money);
+        int i = 1 / 0;    // 抛出异常
+        accountDao.updateMoney(targetId, targetAccount.getMoney() + money);
+    }
+}
+```
+ 6. Resource目录下的jdbcConfig.properties配置文件：
+```
+jdbc.driverClass = com.mysql.jdbc.Driver
+jdbc.jdbcUrl = jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Shanghai
+jdbc.user = Cris
+jdbc.password = 123
+```
+ 6. 自定义Spring的配置类SpringConfiguration，需要**声明该类为配置类，指定创建核心容器时要扫描的包，开启AOP注解支持，并将DataSource和QueryRunner添加到容器中**
+```
+@Configuration  // 声明该类为配置类
+@ComponentScan("pers.cris") // 配置创建核心容器时要扫描的包
+@EnableAspectJAutoProxy // 开启AOP注解支持
+@PropertySource("classpath:jdbcConfig.properties")  // 指定配置文件位置
+public class SpringConfiguration {
+    // 用SpEL注入JDBC四大参数
+    @Value("${jdbc.driverClass}")
+    private String driverClass;
+
+    @Value("${jdbc.jdbcUrl}")
+    private String jdbcUrl;
+
+    @Value("${jdbc.user}")
+    private String user;
+
+    @Value("${jdbc.password}")
+    private String password;
+
+    /**
+     * 将DataSource添加到核心容器中
+     */
+    @Bean("ds")
+    public DataSource getDataSource() {
+        try {
+            ComboPooledDataSource ds = new ComboPooledDataSource();
+            ds.setDriverClass(driverClass);
+            ds.setJdbcUrl(jdbcUrl);
+            ds.setUser(user);
+            ds.setPassword(password);
+            return ds;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 将QueryRunner添加到核心容器中
+     */
+    @Bean("runner")
+    public QueryRunner getQueryRunner() {
+        return new QueryRunner();
+    }
+}
+```
+ 7. 模拟表现层，调用Service层，进行测试：
+```
+public class Client {
+    public static void main(String[] args) {
+        ApplicationContext ac = new AnnotationConfigApplicationContext(SpringConfiguration.class);
+        IAccountService accountService = ac.getBean("accountService", IAccountService.class);
+        accountService.transfer(1, 2, 100);
+    }
+}
+```
+事务的回滚控制成功
+
+---
+
+## JdbcTemplate ##
+
+- **JdbcTemplate**是Spring提供的对JDBC操作的封装，和dbutils类似（**JdbcTemplate相当于QueryRunner**），需要导入的依赖：
+ - spring-jdbc
+ - spring-tx（用于实现事务控制）
+- **DriverManagerDataSource**是Spring提供DataSource数据源，和C3P0等数据源类似
+
+###### JdbcTemplate入门 ######
+
+```
+    /**
+     * JdbcTemplate入门
+     */
+    @Test
+    public void jdbcTemplateDemo1() {
+        // 创建DataSource数据源，选用Spring内置的DriverManagerDataSource
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("com.mysql.jdbc.Driver");
+        ds.setUrl("jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Shanghai");
+        ds.setUsername("Cris");
+        ds.setPassword("123");
+
+        // 创建JdbcTemplate对象，并指定数据源
+        JdbcTemplate jt = new JdbcTemplate(ds);
+
+        // 用JdbcTemplate对象执行SQL语句
+        jt.execute("INSERT INTO tb_account(money, uid) VALUES(5000, 7)");
+    }
+```
+
+###### 使用IoC配置方式获取JdbcTemplate ##########
+
+在bean.xml中配置DataSource数据源和JdbcTemplate：
+```
+    <!-- 配置DataSource数据源，选用Spring内置的DriverManagerDataSource -->
+    <bean id="ds" class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+        <property name="driverClassName" value="com.mysql.jdbc.Driver"/>
+        <property name="url" value="jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Shanghai"/>
+        <property name="username" value="Cris"/>
+        <property name="password" value="123"/>
+    </bean>
+
+    <!-- 配置JdbcTemplate -->
+    <bean id="jdbcTemplate" class="org.springframework.jdbc.core.JdbcTemplate">
+        <property name="dataSource" ref="ds"/>
+    </bean>
+```
+
+测试：
+```
+    /**
+     * 通过IoC配置来获取JdbcTemplate并执行SQL语句
+     */
+    @Test
+    public void jdbcTemplateDemo2() {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        JdbcTemplate jt = ac.getBean("jdbcTemplate", JdbcTemplate.class);
+        jt.execute("INSERT INTO tb_account(money, uid) VALUES(5000, 8)");
+    }
+```
+
+###### JdbcTemplate的常用方法 ######
+
+- `execute(Srring sql)`：执行SQL语句，该方法的SQL语句写死了
+- `query(String sql, RowMapper mapper, Object... args)`：执行查询一行或多行的操作，RowMapper用于将结果集封装成对象，一般new一个**BeanPropertyRowMapper**即可，**返回的是一个List，若查询单个，则从List中取第一个元素即可**
+- `queryForObject(String sql, Class requiredType, Object... args)`：执行查询一行一列的操作，**requiredType指定返回值的类型**
+- `update(String sql, Object... args)`：执行增删改操作
+
+```
+    /**
+     * JdbcTemplate的CRUD操作
+     */
+    @Test
+    public void jdbcTemplateDemo3() {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        JdbcTemplate jt = ac.getBean("jdbcTemplate", JdbcTemplate.class);
+
+        /* 查询多行 query()
+        List<Account> accounts1 = jt.query("SELECT * FROM tb_account",
+                new BeanPropertyRowMapper<>(Account.class));
+        for (Account account : accounts1)
+            System.out.println(account);
+         */
+
+        /* 查询一行 query()
+        List<Account> accounts2 = jt.query("SELECT * FROM tb_account WHERE id = ?",
+                new BeanPropertyRowMapper<>(Account.class), 5);
+        System.out.println(accounts2.isEmpty() ? "没有匹配数据" : accounts2.get(0));
+         */
+
+        /* 查询单行单列数据 queryForObject()
+        Integer res = jt.queryForObject("SELECT COUNT(*) FROM tb_account WHERE money > ?",
+                Integer.class, 3000);
+        System.out.println(res);
+         */
+
+        /* 插入 update()
+        jt.update("INSERT INTO tb_account(money, uid) VALUES(?, ?)", 1000, 9);
+         */
+
+        /* 删除 update()
+        jt.update("DELETE FROM tb_account WHERE id = ?", 7);
+         */
+
+        /* 更新 update() */
+        jt.update("UPDATE tb_account SET money = ? WHERE id = ?", 6000, 6);
+    }
+```
+
+### JdbcTemplate：DAO编写的两种方式 ###
+
+- JdbcTemplate：DAO编写的两种方式：
+ 1. 和以前一样，**在DAO实现类中注入JdbcTemplate属性**
+DAO：
+```
+public class AccountDaoImpl1 implements IAccountDao {
+    private JdbcTemplate jt;
+
+    public void setJt(JdbcTemplate jt) {
+        this.jt = jt;
+    }
+
+    @Override
+    public List<Account> findAll() {
+        return jt.query("SELECT * FROM tb_account", new BeanPropertyRowMapper<>(Account.class));
+    }
+}
+```
+bean.xml：
+```
+    <!-- 配置DataSource数据源 -->
+    <bean id="ds" class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+        <property name="driverClassName" value="com.mysql.jdbc.Driver"/>
+        <property name="url" value="jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Shanghai"/>
+        <property name="username" value="Cris"/>
+        <property name="password" value="123"/>
+    </bean>
+
+    <!-- 配置JdbcTemplate -->
+    <bean id="jdbcTemplate" class="org.springframework.jdbc.core.JdbcTemplate">
+        <property name="dataSource" ref="ds"/>
+    </bean>
+
+    <!-- 配置DAO1 -->
+    <bean id="accountDao1" class="pers.cris.dao.impl.AccountDaoImpl1">
+        <property name="jt" ref="jdbcTemplate"/>
+    </bean>
+```
+测试：
+```
+    /**
+     * 测试AccountDaoImpl1（注入JdbcTemplate方式）
+     */
+    @Test
+    public void testAccountDaoImpl1() {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        IAccountDao accountDao = ac.getBean("accountDao1", IAccountDao.class);
+        List<Account> accounts = accountDao.findAll();
+        for (Account account : accounts)
+            System.out.println(account);
+    }
+```
+ 2. **DAO实现类继承JdbcDaoSupport类，并在bean.xml中给DAO实现类注入DataSource或JdbcTemplate**（若注入的是DataSource，会调用JdbcDaoSupport的setDataSource()方法，里面会给其JdbcTemplate属性赋值），然后就可以通过**getJdbcTemplate()方法从父类中获取JdbcTemplate对象**，其中**JdbcDaoSupport类的作用是抽取所有DAO中JdbcTemplate声明和赋值的重复代码**
+DAO:
+```
+public class AccountDaoImpl2 extends JdbcDaoSupport implements IAccountDao {
+    @Override
+    public List<Account> findAll() {
+        return getJdbcTemplate().query("SELECT * FROM tb_account", new BeanPropertyRowMapper<>(Account.class));
+    }
+}
+```
+bean.xml：
+```
+    <!-- 配置DataSource数据源 -->
+    <bean id="ds" class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+        <property name="driverClassName" value="com.mysql.jdbc.Driver"/>
+        <property name="url" value="jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Shanghai"/>
+        <property name="username" value="Cris"/>
+        <property name="password" value="123"/>
+    </bean>
+
+    <!-- 配置JdbcTemplate -->
+    <bean id="jdbcTemplate" class="org.springframework.jdbc.core.JdbcTemplate">
+        <property name="dataSource" ref="ds"/>
+    </bean>
+
+    <!-- 配置DAO2 -->
+    <bean id="accountDao2" class="pers.cris.dao.impl.AccountDaoImpl2">
+        <!-- 注入DataSource或JdbcTemplate -->
+        <property name="dataSource" ref="ds"/>
+<!--        <property name="jdbcTemplate" ref="jdbcTemplate"/>-->
+    </bean>
+```
+测试：
+```
+    /**
+     * 测试AccountDaoImpl2（继承JdbcDaoSupport方式）
+     */
+    @Test
+    public void testAccountDaoImpl2() {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        IAccountDao accountDao = ac.getBean("accountDao2", IAccountDao.class);
+        List<Account> accounts = accountDao.findAll();
+        for (Account account : accounts)
+            System.out.println(account);
+    }
+```
+
+- 这两种编写DAO方式的不同之处：
+ - **自己注入JdbcTemplate的方式：所有DAO中都会有JdbcTemplate声明和赋值的重复代码（基于注解开发时推荐）**
+ - **继承JdbcDaoSupport类的方式**：抽取了DAO中JdbcTemplate声明和赋值的重复代码，但**必须要在bean.xml中进行配置，给DAO（其实是给JdbcDaoSupport）注入DataSource或JdbcTemplate，而使用注解进行注入比较困难（因为JdbcDaoSupport不是自己写的）（基于XML开发时推荐）**
+
+---
+
+## Spring中的声明式事务控制 ##
+
+- **声明式事务控制**，是Spring提供的**通过**基于XML或注解**配置的方式来实现事务控制**
+
+#### Spring基于XML的声明式事务控制 ####
+
+- Spring中基于XML的声明式事务控制配置步骤（bean.xml中，需要引入aop和tx的XML名称空间和XML约束）：
+ 1. 配置Service、DAO、DataSource等
+ 2. **配置事务管理器DataSourceTransactionManager，并注入DataSource**
+ 2. **配置事务的通知：`<tx:advice>标签`**，其`id`属性指定该事务通知的唯一标识，**`transaction-manager`属性指定事务管理器（PlatformTransactionManager接口类型，直接用Spring提供的实现类DataSourceTransactionManager）**
+ 3. 在`<tx:advice>`标签内部**配置事务的属性**：**`<tx:method>`**标签`name`属性用于指定执行该事务控制的方法，**可以有通配符**，其余属性用于配置事务的属性：
+```
+isolation属性：用于指定事务的隔离级别，默认值“DEFAULT”表示使用数据库的隔离级别
+propagation属性：用于指定事务的传播行为，默认值“REQUIRED”表示若无事务则加上事务（增删改操作），“SUPPORTS”表示若原本没有事务则不加事务（查询操作）
+read-only属性：用于指定事务是否只读，查询操作设置为true，增删改操作设置为false，表示读写
+timeout属性：用于指定事务的超时时间，默认值-1表示永不超时
+rollback-for属性：用于指定一个异常，当产生该异常时回滚，产生其他异常时不回滚，默认所有异常都回滚
+no-rollback-for属性：用于指定一个异常，当产生该异常时不会滚，产生其他异常时回滚，默认所有异常都回滚
+```
+ 4. 配置切入点：`<aop:pointcut>`标签
+ 5. **配置advisor（用于建立事务通知和切入点之间的对应关系）：`<aop:advisor>`标签**，其**`advice-ref`属性指定事务通知的id**，pointcut或pointcut-ref指定切入点表达式或其引用
+
+
+###### 案例：Spring基于XML的声明式事务控制实现转账 ######
+
+- 步骤：
+ 1. 在pom.xml中引入Spring-Context、spring-jdbc、spring-tx、AspectJ Waver、MySQL、junit的依赖：
+```
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-jdbc</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-tx</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+            <version>1.9.5</version>
+        </dependency>
+
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+            <version>8.0.20</version>
+        </dependency>
+
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.12</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.encoding>UTF-8</maven.compiler.encoding>
+        <java.version>11</java.version>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+    </properties>
+```
+ 2. 编写DAO实现类、Service实现类，和之前无区别，其中DAO继承JdbcDaoSupport，而Service实现类仍抛出异常：
+```
+public class AccountDaoImpl extends JdbcDaoSupport implements IAccountDao {
+    /**
+     * 根据ID查询账户信息
+     * @param id ID
+     * @return 账户信息
+     */
+    @Override
+    public Account findById(int id) {
+        List<Account> list = getJdbcTemplate().query("SELECT * FROM tb_account WHERE id = ?",
+                new BeanPropertyRowMapper<>(Account.class), id);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    /**
+     * 更新账户信息
+     * @param account 账户信息
+     */
+    @Override
+    public void update(Account account) {
+        getJdbcTemplate().update("UPDATE tb_account SET money = ?, uid = ? WHERE id = ?",
+                account.getMoney(), account.getUid(), account.getId());
+    }
+}
+```
+```
+public class AccountServiceImpl implements IAccountService {
+    private IAccountDao accountDao;
+
+    public void setAccountDao(IAccountDao accountDao) {
+        this.accountDao = accountDao;
+    }
+
+    /**
+     * 转账
+     * @param sourceId 转出账户ID
+     * @param targetId 转入账户ID
+     * @param money    转账金额
+     */
+    @Override
+    public void transfer(int sourceId, int targetId, double money) {
+        Account sourceAccount = accountDao.findById(sourceId);
+        Account targetAccount = accountDao.findById(targetId);
+        sourceAccount.setMoney(sourceAccount.getMoney() - money);
+        targetAccount.setMoney(targetAccount.getMoney() + money);
+        accountDao.update(sourceAccount);
+        int i = 1 / 0;  // 抛出异常
+        accountDao.update(targetAccount);
+    }
+}
+```
+ 3. 在bean.xml中进行配置，配置Service、DAO、DataSource，以及配置声明式事务控制：
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:aop="http://www.springframework.org/schema/aop"
+       xmlns:tx="http://www.springframework.org/schema/tx"
+       xsi:schemaLocation="
+        http://www.springframework.org/schema/beans
+        https://www.springframework.org/schema/beans/spring-beans.xsd
+        http://www.springframework.org/schema/tx
+        https://www.springframework.org/schema/tx/spring-tx.xsd
+        http://www.springframework.org/schema/aop
+        https://www.springframework.org/schema/aop/spring-aop.xsd">
+    <!-- 要导入有aop标签和tx标签的XML约束 -->
+
+    <!-- 配置Service -->
+    <bean id="accountService" class="pers.cris.service.impl.AccountServiceImpl">
+        <property name="accountDao" ref="accountDao"/>
+    </bean>
+
+    <!-- 配置Dao，需要为其父类JdbcDaoSupport注入DataSource或JdbcTemplate -->
+    <bean id="accountDao" class="pers.cris.dao.impl.AccountDaoImpl">
+        <property name="dataSource" ref="ds"/>
+    </bean>
+
+    <!-- 配置数据源 -->
+    <bean id="ds" class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+        <property name="driverClassName" value="com.mysql.jdbc.Driver"/>
+        <property name="url" value="jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Shanghai"/>
+        <property name="username" value="Cris"/>
+        <property name="password" value="123"/>
+    </bean>
+
+    <!--
+         Spring中基于XML的声明式事务控制配置步骤：
+            1. 配置事务管理器DataSourceTransactionManager，并注入DataSource
+            2. 配置事务的通知并配置事务的属性
+            3. 配置切入点
+            4. 配置advisor：用于建立事务通知和切入点之间的对应关系
+    -->
+
+    <!-- 配置事务管理器 -->
+    <bean id="txManager" class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
+        <property name="dataSource" ref="ds"/>
+    </bean>
+
+    <!-- 配置事务的通知，并给事务通知指定事务管理器 -->
+    <tx:advice id="txAdvice" transaction-manager="txManager">
+        <!-- 配置事务的属性 -->
+        <tx:attributes>
+            <tx:method name="*" propagation="REQUIRED" read-only="false"/>  <!-- 除find开头的方法之外的所有方法 -->
+            <tx:method name="find*" propagation="SUPPORTS" read-only="true"/>   <!-- 查询方法 -->
+        </tx:attributes>
+    </tx:advice>
+
+    <aop:config>
+        <!-- 配置切入点 -->
+        <aop:pointcut id="pt1" expression="execution(* pers.cris.service.impl.*.*(..))"/>
+        <!-- 配置advisor，建立事务通知和切入点之间的对应关系 -->
+        <aop:advisor advice-ref="txAdvice" pointcut-ref="pt1"/>
+    </aop:config>
+</beans>
+```
+ 4. 测试：
+```
+    /**
+     * 测试Spring基于XML的声明式事务控制
+     */
+    @Test
+    public void testTransactionManager() {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        IAccountService accountService = ac.getBean("accountService", IAccountService.class);
+        accountService.transfer(2, 1, 100);
+    }
+```
+结果：事务回滚成功
+
+---
+
+#### Spring基于注解的声明式事务控制 ####
+
+- Spring中基于注解的声明式事务控制步骤：
+ 1. **配置事务管理器DataSourceTransactionManager，并注入DataSource**
+ 2. **开启Spring对注解事务的支持：`<tx:annotation-driven>`标签**，并用其**`transaction-manager`属性指定事务管理器**
+ 3. 在需要事务控制的地方加上**`@Transactional`注解**（其属性可以设置事务的属性）即可
+
+###### 案例：Spring基于注解的声明式事务控制实现转账 ######
+
+- 步骤：
+ 1. 在pom.xml中导入Spring-Context、spring-jdbc、spring-tx、javax.annotation-api、AspectJ Waver、MySQL、junit的依赖：
+```
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-jdbc</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-tx</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+            <version>1.9.5</version>
+        </dependency>
+        <dependency>
+            <groupId>javax.annotation</groupId>
+            <artifactId>javax.annotation-api</artifactId>
+            <version>1.3.1</version>
+        </dependency>
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+            <version>8.0.20</version>
+        </dependency>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.12</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.encoding>UTF-8</maven.compiler.encoding>
+        <java.version>11</java.version>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+    </properties>
+```
+ 3. 在bean.xml中，配置创建容器时要扫描的包、数据源、JdbcTemplate、**事务管理器**，并**开启Spring对注解事务的支持**：
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:tx="http://www.springframework.org/schema/tx"
+       xsi:schemaLocation="
+        http://www.springframework.org/schema/beans
+        https://www.springframework.org/schema/beans/spring-beans.xsd
+        http://www.springframework.org/schema/tx
+        https://www.springframework.org/schema/tx/spring-tx.xsd
+        http://www.springframework.org/schema/context
+        https://www.springframework.org/schema/context/spring-context.xsd">
+    <!-- 要导入有context标签和tx标签的XML约束 -->
+
+    <!-- 配置创建核心容器时要扫描注解的包 -->
+    <context:component-scan base-package="pers.cris"/>
+
+    <!-- 配置数据源 -->
+    <bean id="ds" class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+        <property name="driverClassName" value="com.mysql.jdbc.Driver"/>
+        <property name="url" value="jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Shanghai"/>
+        <property name="username" value="Cris"/>
+        <property name="password" value="123"/>
+    </bean>
+
+    <!-- 配置JdbcTemplate，并注入数据源 -->
+    <bean id="jdbcTemplate" class="org.springframework.jdbc.core.JdbcTemplate">
+        <property name="dataSource" ref="ds"/>
+    </bean>
+
+    <!--
+         Spring中基于注解的声明式事务控制配置步骤：
+            1. 配置事务管理器DataSourceTransactionManager，并注入DataSource
+            2. 开启Spring对注解事务的支持：<tx:annotation-driven>标签，其transaction-manager属性指定事务管理器
+            3. 在需要事务控制的地方加上@Transactional注解
+    -->
+
+    <!-- 配置事务管理器，并注入数据源 -->
+    <bean id="txManager" class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
+        <property name="dataSource" ref="ds"/>
+    </bean>
+
+    <!-- 开启Spring对注解事务的支持 -->
+    <tx:annotation-driven transaction-manager="txManager"/>
+</beans>
+```
+ 2. 编写DAO实现类，**基于注解时DAO实现类不能再继承JdbcDaoSupport，而要自己注入JdbcTemplate**：
+```
+@Repository("accountDao")
+public class AccountDaoImpl implements IAccountDao {
+    @Resource(name = "jdbcTemplate")
+    private JdbcTemplate jdbcTemplate;  // 基于注解时，无法再继承JdbcDaoSupport，而要自己注入JdbcTemplate
+
+    /**
+     * 根据ID查询账户信息
+     * @param id ID
+     * @return 账户信息
+     */
+    @Override
+    public Account findById(int id) {
+        List<Account> list = jdbcTemplate.query("SELECT * FROM tb_account WHERE id = ?",
+                new BeanPropertyRowMapper<>(Account.class), id);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    /**
+     * 更新账户信息
+     * @param account 账户信息
+     */
+    @Override
+    public void update(Account account) {
+        jdbcTemplate.update("UPDATE tb_account SET money = ?, uid = ? WHERE id = ?",
+                account.getMoney(), account.getUid(), account.getId());
+    }
+}
+```
+ 5. 编写Service实现类，并**给需要事务支持的位置加上`@Transactional`注解**，同时抛出异常：
+```
+@Service("accountService")
+@Transactional()  // 可以写在类上（对该类所有方法有效），也可以写在方法上（只对该方法有效），注解属性可以指定事务属性
+public class AccountServiceImpl implements IAccountService {
+    @Resource(name = "accountDao")
+    private IAccountDao accountDao;
+
+    /**
+     * 转账
+     * @param sourceId 转出账户ID
+     * @param targetId 转入账户ID
+     * @param money    转账金额
+     */
+    @Override
+    public void transfer(int sourceId, int targetId, double money) {
+        Account sourceAccount = accountDao.findById(sourceId);
+        Account targetAccount = accountDao.findById(targetId);
+        sourceAccount.setMoney(sourceAccount.getMoney() - money);
+        targetAccount.setMoney(targetAccount.getMoney() + money);
+        accountDao.update(sourceAccount);
+        int i = 1 / 0;  // 抛出异常
+        accountDao.update(targetAccount);
+    }
+}
+```
+ 6. 测试：
+```
+    /**
+     * 测试Spring基于注解的声明式事务控制
+     */
+    @Test
+    public void testTransactionManager() {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        IAccountService accountService = ac.getBean("accountService", IAccountService.class);
+        accountService.transfer(2, 1, 100);
+    }
+```
+结果：事务回滚成功
+
+---
+
+#### Spring基于纯注解的声明式事务控制 ####
+
+- 基于纯注解时，**在Spring配置类上写上`@EnableTransactionManagement`注解，开启Spring对注解事务的支持**
+
+###### 案例：Spring基于纯注解的声明式事务控制实现转账 ######
+
+- 步骤：
+ 1. 在pom.xml中导入Spring-Context、spring-jdbc、spring-tx、javax.annotation-api、spring-test（可选，用于整合Spring与junit）、AspectJ Waver、MySQL、junit的依赖：
+```
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-jdbc</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-tx</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-test</artifactId>
+            <version>5.2.6.RELEASE</version>
+        </dependency>
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+            <version>1.9.5</version>
+        </dependency>
+        <dependency>
+            <groupId>javax.annotation</groupId>
+            <artifactId>javax.annotation-api</artifactId>
+            <version>1.3.1</version>
+        </dependency>
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+            <version>8.0.20</version>
+        </dependency>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.12</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.encoding>UTF-8</maven.compiler.encoding>
+        <java.version>11</java.version>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+    </properties>
+```
+ 2. 编写DAO实现类，**不能继承JdbcDaoSupport，要需要自己注入JdbcTemplate**：
+```
+@Repository("accountDao")
+public class AccountDaoImpl implements IAccountDao {
+    @Resource(name = "jdbcTemplate")
+    private JdbcTemplate jdbcTemplate;
+
+    /**
+     * 根据ID查询账户信息
+     * @param id ID
+     * @return   账户信息
+     */
+    @Override
+    public Account findById(int id) {
+        List<Account> list = jdbcTemplate.query("SELECT * FROM tb_account WHERE id = ?",
+                new BeanPropertyRowMapper<>(Account.class), id);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    /**
+     * 更新账户信息
+     * @param account 账户信息
+     */
+    @Override
+    public void update(Account account) {
+        jdbcTemplate.update("UPDATE tb_account SET money = ?, uid = ? WHERE id = ?",
+                account.getMoney(), account.getUid(), account.getId());
+    }
+}
+```
+ 3. 编写Service实现类，**`@Transactional`注解添加事务控制**，同时在转账过程中抛出异常：
+```
+@Service("accountService")
+@Transactional  // 添加事务控制
+public class AccountServiceImpl implements IAccountService {
+    @Resource(name = "accountDao")
+    private IAccountDao accountDao;
+
+    /**
+     * 转账
+     * @param sourceId 转出账户ID
+     * @param targetId 转入账户ID
+     * @param money    转账金额
+     */
+    @Override
+    public void transfer(int sourceId, int targetId, double money) {
+        Account sourceAccount = accountDao.findById(sourceId);
+        Account targetAccount = accountDao.findById(targetId);
+        sourceAccount.setMoney(sourceAccount.getMoney() - money);
+        targetAccount.setMoney(targetAccount.getMoney() + money);
+        accountDao.update(sourceAccount);
+        int i = 1 / 0;  // 抛出异常
+        accountDao.update(targetAccount);
+    }
+}
+```
+ 4. Resource目录下的jdbcConfig.properties配置文件中的内容：
+```
+jdbc.driver = com.mysql.jdbc.Driver
+jdbc.url = jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Shanghai
+jdbc.username = Cris
+jdbc.password = 123
+```
+ 5. Spring的主配置类SpringConfiguration，`@ComponentScan`注解指定创建容器时要扫描的包，`@PropertySource`注解指定JDBC配置文件位置，`@Import`注解指定子配置类（JdbcConfiguration类和TransactionConfiguration类），**`@EnableTransactionManagement`注解开启Spring对注解事务的支持**：
+```
+@Configuration
+@ComponentScan("pers.cris") // 指定创建容器时要扫描注解的包
+@PropertySource("jdbcConfig.properties")
+@Import({JdbcConfiguration.class, TransactionConfiguration.class})  // 引入子配置文件
+@EnableTransactionManagement    // 开启Spring对注解事务的支持
+public class SpringConfiguration {
+}
+```
+ 6. JDBC相关的子配置类JdbcConfiguration中，配置数据源和JdbcTemplate：
+```
+@Configuration
+public class JdbcConfiguration {
+    @Value("${jdbc.driver}")
+    private String driver;
+
+    @Value("${jdbc.url}")
+    private String url;
+
+    @Value("${jdbc.username}")
+    private String username;
+
+    @Value("${jdbc.password}")
+    private String password;
+
+    @Bean("jdbcTemplate")
+    public JdbcTemplate getJdbcTemplate(DataSource ds) {
+        return new JdbcTemplate(ds);
+    }
+
+    @Bean("ds")
+    public DataSource getDataSource() {
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName(driver);
+        ds.setUrl(url);
+        ds.setUsername(username);
+        ds.setPassword(password);
+
+        return ds;
+    }
+}
+```
+ 7. 事务相关的子配置类TransactionConfiguration中，配置事务管理器TransactionManager：
+```
+@Configuration
+public class TransactionConfiguration {
+    @Bean("txManager")
+    public PlatformTransactionManager getTransactionManager(DataSource ds) {
+        return new DataSourceTransactionManager(ds);
+    }
+}
+```
+ 8. Spring整合junit进行测试（复习Spring整合junit）：
+```
+@RunWith(SpringJUnit4ClassRunner.class) // 更换运行器Runner
+@ContextConfiguration(classes = SpringConfiguration.class)  // 指定创建核心容器时的配置类或配置文件
+public class TransactionManagerTest {
+    @Resource(name = "accountService")
+    private IAccountService accountService;
+
+    /**
+     * 测试纯注解配置的声明式事务控制
+     */
+    @Test
+    public void testTransactionManager() {
+        accountService.transfer(2, 1, 100);
+    }
+}
+```
+结果：事务回滚成功
+
+---
+
+#### Spring编程式事务控制（了解） ####
+
+- Spring还提供了**TransactionTemplate，可以让我们实现编程式事务控制**，但这样做**也会造成代码冗余**
+- 需要在Service中注入TransactionTemplate对象，然后在每个需要控制事务的方法中调用该对象的**execute()方法**，让其帮我们实现事务的回滚/提交
+
+###### 案例：Spring的编程式事务控制实现转账 ######
+
+- 步骤：
+ 1. 在pom.xml中导入Spring-Context、spring-jdbc、MySQL、junit的依赖：
+```
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-jdbc</artifactId>
+            <version>5.2.7.RELEASE</version>
+        </dependency>
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+            <version>8.0.20</version>
+        </dependency>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.12</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.encoding>UTF-8</maven.compiler.encoding>
+        <java.version>11</java.version>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+    </properties>
+</project>
+```
+ 1. 编写DAO实现类，选择继承JdbcDaoSupport：
+```
+public class AccountDaoImpl extends JdbcDaoSupport implements IAccountDao {
+    /**
+     * 根据ID查询账户信息
+     * @param id ID
+     * @return 账户信息
+     */
+    @Override
+    public Account findById(int id) {
+        List<Account> list = getJdbcTemplate().query("SELECT * FROM tb_account WHERE id = ?",
+                new BeanPropertyRowMapper<>(Account.class), id);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    /**
+     * 更新账户信息
+     * @param account 账户信息
+     */
+    @Override
+    public void update(Account account) {
+        getJdbcTemplate().update("UPDATE tb_account SET money = ?, uid = ? WHERE id = ?",
+                account.getMoney(), account.getUid(), account.getId());
+    }
+}
+```
+ 2. 编写Service实现类，**需要注入TransactionTemplate属性，在要实现事务控制的方法中调用TransactionTemplate的execute()方法**，并在转账过程中抛出异常：
+```
+public class AccountServiceImpl implements IAccountService {
+    private IAccountDao accountDao;
+    private TransactionTemplate txTemplate;
+
+    public void setTxTemplate(TransactionTemplate txTemplate) {
+        this.txTemplate = txTemplate;
+    }
+
+    public void setAccountDao(IAccountDao accountDao) {
+        this.accountDao = accountDao;
+    }
+
+    /**
+     * 转账
+     * @param sourceId 转出账户ID
+     * @param targetId 转入账户ID
+     * @param money    转账金额
+     */
+    @Override
+    public void transfer(int sourceId, int targetId, double money) {
+        // 用TransactionTemplate的execute()方法来实现事务控制（它会帮我们做回滚/提交），但每个方法中都要写一次，又造成了冗余
+        txTemplate.execute(new TransactionCallback<Object>() {
+            @Override
+            public Object doInTransaction(TransactionStatus transactionStatus) {
+                Account sourceAccount = accountDao.findById(sourceId);
+                Account targetAccount = accountDao.findById(targetId);
+                sourceAccount.setMoney(sourceAccount.getMoney() - money);
+                targetAccount.setMoney(targetAccount.getMoney() + money);
+                accountDao.update(sourceAccount);
+                int i = 1 / 0;  // 抛出异常
+                accountDao.update(targetAccount);
+                return null;
+            }
+        });
+    }
+}
+```
+ 3. 在bean.xml中，**配置Service时需要注入TransactionTemplate，配置TransactionTemplate时需要注入事务管理器TransactionManager**：
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="
+        http://www.springframework.org/schema/beans
+        https://www.springframework.org/schema/beans/spring-beans.xsd">
+
+    <!-- 配置Service，需要注入TransactionTemplate -->
+    <bean id="accountService" class="pers.cris.service.impl.AccountServiceImpl">
+        <property name="accountDao" ref="accountDao"/>
+        <property name="txTemplate" ref="txTemplate"/>
+    </bean>
+
+    <!-- 配置TransactionTemplate，需要注入事务管理器TransactionManager -->
+    <bean id="txTemplate" class="org.springframework.transaction.support.TransactionTemplate">
+        <property name="transactionManager" ref="txManager"/>
+    </bean>
+
+    <!-- 配置事务管理器 -->
+    <bean id="txManager" class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
+        <property name="dataSource" ref="ds"/>
+    </bean>
+
+    <!-- 配置Dao -->
+    <bean id="accountDao" class="pers.cris.dao.impl.AccountDaoImpl">
+        <property name="dataSource" ref="ds"/>
+    </bean>
+
+    <!-- 配置数据源 -->
+    <bean id="ds" class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+        <property name="driverClassName" value="com.mysql.jdbc.Driver"/>
+        <property name="url" value="jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Shanghai"/>
+        <property name="username" value="Cris"/>
+        <property name="password" value="123"/>
+    </bean>
+</beans>
+```
+ 5. 测试：
+```
+    /**
+     * 测试Spring编程式事务控制
+     */
+    @Test
+    public void testTransactionManager() {
+        ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
+        IAccountService accountService = ac.getBean("accountService", IAccountService.class);
+        accountService.transfer(2, 1, 100);
+    }
+```
+结果：事务回滚成功
