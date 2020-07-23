@@ -544,10 +544,10 @@ parameterType属性既可以是`java.lang.Integer`，也可以是`int`或`Intege
 
 ---
 
-#### `<typeAliases>`标签和`<package>`标签 ####
+#### `<typeAlias>`标签和`<package>`标签 ####
 
 - 在映射配置文件中，resultType和parameterType属性，若是自定义的类，都必须写全限定类名，而int、String等类则不用，且不区分大小写，这是因为它们配置了别名
-- 我们也**可以在主配置文件SqlMapConfig.xml的`<configuartion>`标签中通过`<typeAliases>`和`<typeAlias>`标签给自定义类配置别名**，起到简化代码的作用，**配置别名后映射配置文件的resultType和parameterType属性就可以直接写该类的类名，而不用再写包名，且不区分大小写**，例如：
+- 我们也**可以在主配置文件SqlMapConfig.xml的`<configuartion>`标签中通过`<typeAliases>`和`<typeAlias>`标签给自定义类配置别名**，起到简化代码的作用，**配置别名后映射配置文件的resultType和parameterType属性就可以直接写该类的别名，而不用再写包名，且不区分大小写**，例如：
 ```
 <configuration>
 	...
