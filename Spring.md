@@ -11,6 +11,8 @@
  - 声明式事务的支持
  - 方便程序的测试
  - 方便集成各种优秀的框架
+- SSM框架：
+![](.\MyPic\ssm.bmp)
 
 #### 传统JDBC的耦合问题 ####
 
@@ -192,7 +194,7 @@ public class BeanFactory {
 
 #### Spring的IoC核心容器 ####
 
-- **核心容器BeanFactory接口和核心容器ApplicationContext接口：**
+- **核心容器BeanFactory接口和（其子接口）核心容器ApplicationContext接口：**
  - **BeanFactory：在构建核心容器时，创建Bean对象使用的方式是延迟加载**，也就是什么时候通过id获取Bean对象，什么时候才真正创建Bean对象，**适用于多例的Bean**
  - **ApplicationContext（常用）：在构建核心容器时，可以通过配置Bean是单例或多例来决定创建Bean对象使用的方式是立即加载还是延迟加载**
 - **核心容器ApplicationContext接口的三个常用实现类：**
@@ -221,8 +223,7 @@ public class BeanFactory {
  - **使用某个类（如静态工厂类）中的某个静态方法获取Bean对象：**
 ```
     <!-- 创建Bean方式三：某个类（如静态工厂类）中的静态方法（静态方法是属于类的） -->
-    <!-- 先指定该静态工厂类，再指定bean，其中class属性指定该静态工厂类的id，factory-method属性指定要调用该静态工厂类的静态方法名 -->
-    <bean id="staticFactory" class="pers.cris.factory.StaticFactory"/>
+    <!-- class属性指定该静态工厂类的全限定类名，factory-method属性指定要调用该静态工厂类的静态方法名 -->
     <bean id="accountService" class="pers.cris.factory.StaticFactory" factory-method="getAccountService"/>
 ```
 
@@ -230,7 +231,7 @@ public class BeanFactory {
 
 - Spring中Bean的作用范围可以在配置文件的`<bean>`标签中通过`scope`属性来指定，有以下取值：
  - **`scope=singleton`：单例（默认值）**
- - **`scope=prototypr`：多例**
+ - **`scope=prototype`：多例**
  - `scope=request`：作用于Web应用的Request域
  - `scope=session`：作用于Web应用的Session域
  - `scope=global-session`：作用于集群环境下的全局Session域（当不是集群环境时，它就是Session域）
@@ -252,7 +253,7 @@ public class BeanFactory {
 
 #### 依赖注入（DI，Dependency Injection） ####
 
-- IoC的作用是解耦，即降低程序之间的依赖关系，但不可能完全消除耦合，而**依赖注入的作用就是通过配置文件或注解，由Spring来维护程序之间的依赖关系**
+- **IoC**的作用是**解耦**，即降低程序之间的依赖关系，**但不可能完全消除耦合**，而**依赖注入的作用就是通过配置文件或注解，由Spring来维护程序之间的依赖关系**
 - 依赖注入能注入的数据有三类：
  - 基本类型和String
  - Bean（使用XML配置文件或注解配置过的Bean，即在Spring核心容器中的Bean）
@@ -838,7 +839,7 @@ public class AccountServiceImpl implements IAccountService {
 <context:component-scan base-package="pers.cris"/>
 ```
  - 解决方案：
- 2. 在该配置类上写上**`@Component`注解**，该注解的**`value`属性和`basePackage`属性等价，都可以指定创建核心容器时要扫描注解的包（可以有多个）**
+ 2. 在该配置类上写上**`@ComponentScan`注解**，该注解的**`value`属性和`basePackage`属性等价，都可以指定创建核心容器时要扫描注解的包（可以有多个）**
 - Spring配置类如何替代配置文件中将jar包中无法添加注解的Bean添加到核心容器中？例如：
 ```
 <!-- 配置QueryRunner，配置成多例模式，避免多线程并发问题 -->
@@ -855,7 +856,7 @@ public class AccountServiceImpl implements IAccountService {
 </bean>
 ```
  - 解决方案：
- 1. 在配置类中**创建一个方法，返回值为要添加到核心容器中的Bean，并在该方法上添加`@Bean`注解，来将方法返回的Bean添加到核心容器中，该注解的`name`属性可以指定该Bean在核心容器中的id**
+ 1. 在配置类中**创建一个方法，返回值为要添加到核心容器中的Bean，并在该方法上添加`@Bean`注解，来将方法返回的Bean添加到核心容器中，该注解的`value`属性和`name`属性等价，都可以指定该Bean在核心容器中的id**
 - 同时，由于没有了配置文件bean.xml，因此**核心容器**不能再使用ClassPathXmlApplicationContext，而**要使用AnnotationConfigApplicationContext，创建它时需要指定Spring配置类（可以有多个）**
 
  替代bean.xml配置文件的Spring配置类：
@@ -1311,7 +1312,7 @@ public class FactoryImpl implements IFactory {
 ```
     public static void main(String[] args) {
         // 被代理对象
-        final FactoryImpl factory = new FactoryImpl();  // 由于内部类要访问factory，因此需要final
+        FactoryImpl factory = new FactoryImpl();
 
         // 代理对象，通过Proxy.newInstance()方法创建（参数分别是：类加载器、被代理对象实现的接口、InvocationHandler实现类）
         IFactory proxyFactory = (IFactory) Proxy.newProxyInstance(FactoryImpl.class.getClassLoader(),
@@ -1341,11 +1342,18 @@ public class FactoryImpl implements IFactory {
  1. **代理对象的类型应该是被代理对象实现的接口的类型，才能调用该接口的方法**
  2. `Proxy.newInstance()`方法的参数依次是：类加载器（用被代理类的类加载器，是固定写法）、接口数组（被代理类实现的接口数组，是固定写法）、InvocationHandler接口的实现类（一般用匿名内部类的形式，要实现invoke()方法）
  3. InvocationHandler接口的invoke()方法的参数含义依次是：`Object proxy`是代理对象的引用（一般用不上）、`Method method`是当前执行的方法、`Object[] args`是当前执行方法的参数
- 4. InvocationHandler接口的invoke()方法的返回值是通过反射调用被代理对象的method方法的返回值，如`return method.invoke(factory, args);`，**注意是被代理对象factory调用method方法，而不是代理对象proxy调用**。同时，**内部类中引用外部类的成员时，该成员需要加final**
+ 4. InvocationHandler接口的invoke()方法的返回值是通过反射调用被代理对象的method方法的返回值，如`return method.invoke(factory, args);`，**注意是被代理对象factory调用method方法，而不是代理对象proxy调用**
 
 ###### 基于子类的动态代理 ######
 
- 1. 需要在pom.xml中**添加cglib的依赖**
+ 1. 需要在pom.xml中**添加cglib的依赖**：
+```
+        <dependency>
+            <groupId>cglib</groupId>
+            <artifactId>cglib</artifactId>
+            <version>2.2.2</version>
+        </dependency>
+```
  2. 被代理类Factory，没有实现任何接口：
 ```
 public class Factory {
@@ -1358,7 +1366,7 @@ public class Factory {
 ```
     public static void main(String[] args) {
         // 被代理对象
-        final Factory factory = new Factory();  // 由于内部类要访问factory，因此需要final
+        Factory factory = new Factory();
 
         // 被代理对象，用Enhancer.create()方法创建（参数分别是：被代理对象的字节码、Callback的实现类，一般实现其子接口MethodInterceptor）
         Factory proxyFactory = (Factory) Enhancer.create(Factory.class, new MethodInterceptor() {
@@ -1388,7 +1396,7 @@ public class Factory {
  - **代理对象的类型应该指定为被代理对象的类型**
  - Enhancer.create()方法的参数依次是：字节码（被代理对象的字节码，固定写法）、Callback接口的实现类（一般写其子接口MethodInterceptor的实现类）
  - MethodInterceptor接口的intercept()方法的参数含义依次是：`Object o`是代理对象的引用（一般用不上）、`Method method`是当前执行的方法，`Object[] objects`是当前执行方法的参数、`MethodProxy methodProxy`是当前执行方法的代理（一般用不上）
- - MethodInterceptor接口的intercept()方法的返回值是通过反射调用被代理对象的method方法的返回值，如`return method.invoke(factory, objects);`，**注意是被代理对象factory调用method方法，而不是代理对象proxy调用**。同时，**内部类中引用外部类的成员时，该成员需要加final**
+ - MethodInterceptor接口的intercept()方法的返回值是通过反射调用被代理对象的method方法的返回值，如`return method.invoke(factory, objects);`，**注意是被代理对象factory调用method方法，而不是代理对象proxy调用**
 
 ---
 
@@ -1396,7 +1404,7 @@ public class Factory {
 
 - 在上面有事务控制的代码中，Service的每个多操作方法都要添加事务控制，代码冗余且繁琐，同时，方法间耦合太强（某个方法名一改，则大片报错，维护困难），考虑用动态代理将IAccountService进行增强，实现事务控制
 - 步骤：
- 1. AccountServiceImpl中不需要再有TransactionManager类，且其方法中不用再进行事务控制，因为这块任务交给了动态代理的代理对象：
+ 1. AccountServiceImpl中不需要再有TransactionManager属性，且其方法中不用再进行事务控制，因为这块任务交给了动态代理的代理对象：
 ```
 public class AccountServiceImpl implements IAccountService {
     private IAccountDao accountDao;
@@ -1455,7 +1463,7 @@ public class BeanFactory {
     }
 }
 ```
- 3. 在bean.xml中进行配置，其中需要新配置BeanFactory、ProxyAccountService，且Service中不用再注入TransactionManager：
+ 3. 在bean.xml中进行配置，其中需要新配置BeanFactory和ProxyAccountService，且Service中不用再注入TransactionManager：
 ```
     <!-- 配置BeanFactory -->
     <bean id="beanFactory" class="accountWithDynamicProxy.utils.BeanFactory">
@@ -1524,21 +1532,21 @@ public class BeanFactory {
  - 减少重复代码
  - 提高开发效率
  - 便于维护
-- AOP的实现方式：动态代理技术
+- **AOP的实现方式：动态代理技术**
 
 ###### AOP中的一些专业术语 ######
 
-- 连接点（Jointpoint）：被拦截的点，即被代理类中的所有方法
-- 切入点（Pointcut）：被拦截且被增强的点，即被代理类中被增强的方法
- - 切入点一定是连接点，连接点不一定是切入点（可能会通过判断方法名来过滤掉一些不需要增强的方法）
-- 通知/增强（Advice）：拦截到JointPoint后要做的事就是“通知”（Advice），其实就是增强的代码，“通知”（Advice）又分为：
+- **连接点（Jointpoint）：被拦截的点，即被代理类中的所有方法**
+- **切入点（Pointcut）：被拦截且被增强的点，即被代理类中被增强的方法**
+ - **切入点一定是连接点，连接点不一定是切入点**（可能会通过判断方法名来过滤掉一些不需要增强的方法）
+- **通知/增强（Advice）**：拦截到JointPoint后要做的事就是“通知”（Advice），其实就是**增强的代码**，“通知”（Advice）又分为：
  - 前置通知（在`method.invoke()`前面的代码）
  - 后置通知（在`method.invoke()`后面的代码）
  - 异常通知（在`catch{}`里面的代码）
  - 最终通知（在`finally{}`里面的代码）
  - 环绕通知（InvocationHandler接口的实现类的整个invoke()方法，**环绕通知里面会有明确的切入点的调用`method.invoke()`**）
 - 目标对象（Target）：被代理对象
-- 织入（Waving）：创建代理对象来增强被代理对象的过程
+- **织入（Waving）：创建代理对象来增强被代理对象的过程**
 - 代理（Proxy）：代理对象
 - 切面（Aspect）：切入点Jointpoint和通知Advice的结合
 
@@ -1547,7 +1555,7 @@ public class BeanFactory {
 - 开发人员要做的事：
  1. 编写核心业务代码（如上面Account案例的增删改查以及事务控制）
  2. 将公用代码抽取出来，制作成“通知”（Advice）（如抽取上面Account案例的事务控制代码，作为“通知”，即要用动态代理进行增强的部分）
- 3. 在配置文件中，声明切入点与“通知”之间的关系，即切面（如上面Account案例的transfer()方法需要进行事务控制，而其他只与数据库进行一次交互操作的方法则不用）
+ 3. 在配置文件中，声明**切入点与“通知”之间的关系，即切面**（如上面Account案例的transfer()方法需要进行事务控制，而其他只与数据库进行一次交互操作的方法则不用）
 - **运行阶段Spring所能完成的事：**
  - Spring可以**监控切入点方法的执行，一旦监视到切入方法运行，则会使用动态代理机制创建代理对象，并根据“通知”类别，按顺序地将“通知”对应的功能织入，完成完整的代码逻辑运行**
 
@@ -1679,7 +1687,7 @@ method2()方法执行了...
 method3()方法执行了...
 method4()方法执行了...
 ```
-即切入点method1()执行前，会先执行前置通知；而非切入点method2()、method3()则不会
+即切入点method1()执行前，会先执行前置通知；而非切入点method2()、method3()、method4()则不会
 
 ###### 注意事项 ######
 
@@ -1698,7 +1706,7 @@ method4()方法执行了...
  - 包名可以用`..`表示当前包及其子包，例如`execution(* *..AccountServiceImpl.method3(int))`
  - **类名和方法名可以使用通配符`*`**，例如`exection(* *..*.*(int))`
  - 参数列表中，基本数据类型可以直接写（如`int`、`char`），引用数据类型需要写`包名.类名`，（如`java.lang.String`）
- - 参数列表可以使用通配符`*`，但使用的话则必须有参数，例如`execution(* *..*.*(*))`
+ - 参数列表可以使用通配符`*`，但有几个参数就要写几个通配符，例如`execution(* *..*.*(*))`
  - **参数列表可以使用`..`表示有无参数均可，有几个参数均可，任意类型参数均可**，例如`execution(* *..*.*(..))`
  - **实际开发中，切入点表达式一般定位到业务层实现类下的所有方法，例如`execution(* pers.cris.service.impl.*.*(..))`**
 - **配置切入点表达式：`<aop:pointcut>`标签**，id属性为该切入点表达式的唯一标识，**expression属性指定切入点表达式**
@@ -1748,6 +1756,8 @@ public class Logger {
         <aop:aspect id="logAdvice" ref="logger">
             <!-- 配置切入点表达式 -->
             <aop:pointcut id="pt1" expression="execution(* pers.cris.service.impl.*.*(..))"/>
+
+			<!-- 配置通知 -->
             <aop:before method="beforeLogger" pointcut-ref="pt1"/>  <!-- 前置通知 -->
             <aop:after-returning method="afterReturningLogger" pointcut-ref="pt1"/> <!-- 后置通知 -->
             <aop:after-throwing method="afterThrowingLogger" pointcut-ref="pt1"/>   <!-- 异常通知 -->
@@ -1849,7 +1859,7 @@ method1()方法执行了...
 
 - 步骤：
  1. 在pom.xml中导入Spring-Contex、AspectJ Waver（用于监控切入点方法，并在切入点方法执行时将“通知”织入）和junit的依赖
- 2. 在bean.xml中**配置创建核心容器时要扫描的包**，并**配置开启注解AOP的支持**：
+ 2. 在bean.xml中**配置创建核心容器时要扫描的包**，并**配置开启注解AOP的支持（`<aop:aspectj-autoproxy/>`标签）**：
 ```
 <?xml version="1.0" encoding="UTF-8"?>
 <beans xmlns="http://www.springframework.org/schema/beans"
@@ -1886,9 +1896,10 @@ public class AccountServiceImpl implements IAccountService {
 @Component("logger")
 @Aspect // 表示是切面类（通知类）
 public class Logger {
-    // 配置切入点表达式
+    // 配置切入点表达式，是函数的形式
     @Pointcut("execution(* pers.cris.service.impl.*.*(..))")
     private void pt1() {}
+
     @Around("pt1()")    // 环绕通知，并指定切入点表达式
     public Object aroundLogger(ProceedingJoinPoint pjp) {
         try {
@@ -2635,7 +2646,7 @@ bean.xml：
             System.out.println(account);
     }
 ```
- 2. **DAO实现类继承JdbcDaoSupport类，并在bean.xml中给DAO实现类注入DataSource或JdbcTemplate**（若注入的是DataSource，会调用JdbcDaoSupport的setDataSource()方法，里面会给其JdbcTemplate属性赋值），然后就可以通过**getJdbcTemplate()方法从父类中获取JdbcTemplate对象**，其中**JdbcDaoSupport类的作用是抽取所有DAO中JdbcTemplate声明和赋值的重复代码**
+ 2. **DAO实现类继承JdbcDaoSupport类，并在bean.xml中给DAO实现类注入DataSource或JdbcTemplate**（会调用JdbcDaoSupport的set方法），然后就可以通过**getJdbcTemplate()方法从父类中获取JdbcTemplate对象**，其中**JdbcDaoSupport类的作用是抽取所有DAO中JdbcTemplate声明和赋值的重复代码**
 DAO:
 ```
 public class AccountDaoImpl2 extends JdbcDaoSupport implements IAccountDao {
@@ -2708,7 +2719,7 @@ rollback-for属性：用于指定一个异常，当产生该异常时回滚，�
 no-rollback-for属性：用于指定一个异常，当产生该异常时不会滚，产生其他异常时回滚，默认所有异常都回滚
 ```
  4. 配置切入点：`<aop:pointcut>`标签
- 5. **配置advisor（用于建立事务通知和切入点之间的对应关系）：`<aop:advisor>`标签**，其**`advice-ref`属性指定事务通知的id**，pointcut或pointcut-ref指定切入点表达式或其引用
+ 5. **配置advisor（用于建立事务通知和切入点之间的对应关系）：`<aop:advisor>`标签**，其**`advice-ref`属性指定事务通知的id**，`pointcut`或`pointcut-ref`属性指定切入点表达式或其引用
 
 
 ###### 案例：Spring基于XML的声明式事务控制实现转账 ######
@@ -2722,31 +2733,26 @@ no-rollback-for属性：用于指定一个异常，当产生该异常时不会�
             <artifactId>spring-context</artifactId>
             <version>5.2.7.RELEASE</version>
         </dependency>
-
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-jdbc</artifactId>
             <version>5.2.7.RELEASE</version>
         </dependency>
-
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-tx</artifactId>
             <version>5.2.7.RELEASE</version>
         </dependency>
-
         <dependency>
             <groupId>org.aspectj</groupId>
             <artifactId>aspectjweaver</artifactId>
             <version>1.9.5</version>
         </dependency>
-
         <dependency>
             <groupId>mysql</groupId>
             <artifactId>mysql-connector-java</artifactId>
             <version>8.0.20</version>
         </dependency>
-
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
@@ -2899,13 +2905,13 @@ public class AccountServiceImpl implements IAccountService {
 
 - Spring中基于注解的声明式事务控制步骤：
  1. **配置事务管理器DataSourceTransactionManager，并注入DataSource**
- 2. **开启Spring对注解事务的支持：`<tx:annotation-driven>`标签**，并用其**`transaction-manager`属性指定事务管理器**
+ 2. **开启Spring对注解声明式事务控制的支持：`<tx:annotation-driven>`标签**，并用其**`transaction-manager`属性指定事务管理器**
  3. 在需要事务控制的地方加上**`@Transactional`注解**（其属性可以设置事务的属性）即可
 
 ###### 案例：Spring基于注解的声明式事务控制实现转账 ######
 
 - 步骤：
- 1. 在pom.xml中导入Spring-Context、spring-jdbc、spring-tx、javax.annotation-api、AspectJ Waver、MySQL、junit的依赖：
+ 1. 在pom.xml中导入spring-context、spring-jdbc、spring-tx、javax.annotation-api、MySQL、junit的依赖：
 ```
     <dependencies>
         <dependency>
@@ -2922,11 +2928,6 @@ public class AccountServiceImpl implements IAccountService {
             <groupId>org.springframework</groupId>
             <artifactId>spring-tx</artifactId>
             <version>5.2.7.RELEASE</version>
-        </dependency>
-        <dependency>
-            <groupId>org.aspectj</groupId>
-            <artifactId>aspectjweaver</artifactId>
-            <version>1.9.5</version>
         </dependency>
         <dependency>
             <groupId>javax.annotation</groupId>
@@ -2954,7 +2955,7 @@ public class AccountServiceImpl implements IAccountService {
         <maven.compiler.target>11</maven.compiler.target>
     </properties>
 ```
- 3. 在bean.xml中，配置创建容器时要扫描的包、数据源、JdbcTemplate、**事务管理器**，并**开启Spring对注解事务的支持**：
+ 3. 在bean.xml中，配置创建容器时要扫描的包、数据源、JdbcTemplate、**事务管理器**，并**开启Spring对注解声明式事务控制的支持**：
 ```
 <?xml version="1.0" encoding="UTF-8"?>
 <beans xmlns="http://www.springframework.org/schema/beans"
@@ -2989,7 +2990,7 @@ public class AccountServiceImpl implements IAccountService {
     <!--
          Spring中基于注解的声明式事务控制配置步骤：
             1. 配置事务管理器DataSourceTransactionManager，并注入DataSource
-            2. 开启Spring对注解事务的支持：<tx:annotation-driven>标签，其transaction-manager属性指定事务管理器
+            2. 开启Spring对注解声明式事务控制的支持：<tx:annotation-driven>标签，其transaction-manager属性指定事务管理器
             3. 在需要事务控制的地方加上@Transactional注解
     -->
 
@@ -2998,7 +2999,7 @@ public class AccountServiceImpl implements IAccountService {
         <property name="dataSource" ref="ds"/>
     </bean>
 
-    <!-- 开启Spring对注解事务的支持 -->
+    <!-- 开启Spring对注解声明式事务控制的支持 -->
     <tx:annotation-driven transaction-manager="txManager"/>
 </beans>
 ```
@@ -3035,7 +3036,7 @@ public class AccountDaoImpl implements IAccountDao {
  5. 编写Service实现类，并**给需要事务支持的位置加上`@Transactional`注解**，同时抛出异常：
 ```
 @Service("accountService")
-@Transactional()  // 可以写在类上（对该类所有方法有效），也可以写在方法上（只对该方法有效），注解属性可以指定事务属性
+@Transactional  // 可以写在类上（对该类所有方法有效），也可以写在方法上（只对该方法有效），注解属性可以指定事务属性
 public class AccountServiceImpl implements IAccountService {
     @Resource(name = "accountDao")
     private IAccountDao accountDao;
@@ -3076,12 +3077,12 @@ public class AccountServiceImpl implements IAccountService {
 
 #### Spring基于纯注解的声明式事务控制 ####
 
-- 基于纯注解时，**在Spring配置类上写上`@EnableTransactionManagement`注解，开启Spring对注解事务的支持**
+- 基于纯注解时，**在Spring配置类上写上`@EnableTransactionManagement`注解，开启Spring对注解声明式事务控制的支持**
 
 ###### 案例：Spring基于纯注解的声明式事务控制实现转账 ######
 
 - 步骤：
- 1. 在pom.xml中导入Spring-Context、spring-jdbc、spring-tx、javax.annotation-api、spring-test（可选，用于整合Spring与junit）、AspectJ Waver、MySQL、junit的依赖：
+ 1. 在pom.xml中导入Spring-Context、spring-jdbc、spring-tx、javax.annotation-api、spring-test（可选，用于整合Spring与junit）、MySQL、junit的依赖：
 ```
     <dependencies>
         <dependency>
@@ -3103,11 +3104,6 @@ public class AccountServiceImpl implements IAccountService {
             <groupId>org.springframework</groupId>
             <artifactId>spring-test</artifactId>
             <version>5.2.6.RELEASE</version>
-        </dependency>
-        <dependency>
-            <groupId>org.aspectj</groupId>
-            <artifactId>aspectjweaver</artifactId>
-            <version>1.9.5</version>
         </dependency>
         <dependency>
             <groupId>javax.annotation</groupId>
@@ -3198,13 +3194,13 @@ jdbc.url = jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Shanghai
 jdbc.username = Cris
 jdbc.password = 123
 ```
- 5. Spring的主配置类SpringConfiguration，`@ComponentScan`注解指定创建容器时要扫描的包，`@PropertySource`注解指定JDBC配置文件位置，`@Import`注解指定子配置类（JdbcConfiguration类和TransactionConfiguration类），**`@EnableTransactionManagement`注解开启Spring对注解事务的支持**：
+ 5. Spring的主配置类SpringConfiguration，`@ComponentScan`注解指定创建容器时要扫描的包，`@PropertySource`注解指定JDBC配置文件位置，`@Import`注解指定子配置类（JdbcConfiguration类和TransactionConfiguration类），**`@EnableTransactionManagement`注解开启Spring对注解声明式事务控制的支持**：
 ```
 @Configuration
 @ComponentScan("pers.cris") // 指定创建容器时要扫描注解的包
 @PropertySource("jdbcConfig.properties")
 @Import({JdbcConfiguration.class, TransactionConfiguration.class})  // 引入子配置文件
-@EnableTransactionManagement    // 开启Spring对注解事务的支持
+@EnableTransactionManagement    // 开启Spring对注解声明式事务控制的支持
 public class SpringConfiguration {
 }
 ```
