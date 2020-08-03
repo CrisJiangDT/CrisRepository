@@ -43,7 +43,7 @@
     </properties>
 ```
 2. 创建JavaBean对象和DAO接口
-3. 在`src > main > resources`中**创建MyBatis的主配置文件**，一般命名为**SqlMapConfig.xml**，内容示例如下：
+3. 在`src > main > resources`中**创建MyBatis的主配置文件**，一般命名为**sqlMapConfig.xml**，内容示例如下：
 ```
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE configuration
@@ -115,7 +115,7 @@ log4j.logger.java.sql.PreparedStatement=DEBUG
 #### MyBatis入门案例（查询所有） ####
 
 - 按照“MyBatis环境搭建”中的步骤搭建好MyBatis环境后，做入门案例，从数据库中查询所有信息，步骤：
- 1. **读取MyBatis的主配置文件`SqlMapConfig.xml`**（主配置文件中有JDBC四大参数和映射配置文件位置）
+ 1. **读取MyBatis的主配置文件`sqlMapConfig.xml`**（主配置文件中有JDBC四大参数和映射配置文件位置）
  2. 利用主配置文件**创建SqlSessionFactory工厂类**
  3. 使用工厂类**生产SqlSession对象**
  4. 使用SqlSession对象可以**创建指定DAO接口的实现类对象（代理对象）**
@@ -128,8 +128,8 @@ log4j.logger.java.sql.PreparedStatement=DEBUG
      */
     @Test
     public void testAll() throws IOException {
-        // 1. 读取MyBatis的主配置文件SqlMapConfig.xml（主配置文件中JDBC四大参数和映射配置文件位置）
-        InputStream in = Resources.getResourceAsStream("SqlMapConfig.xml");
+        // 1. 读取MyBatis的主配置文件sqlMapConfig.xml（主配置文件中JDBC四大参数和映射配置文件位置）
+        InputStream in = Resources.getResourceAsStream("sqlMapConfig.xml");
 
         // 2. 创建SqlSessionFactory工厂
         SqlSessionFactoryBuilder builder = new SqlSessionFactoryBuilder();
@@ -163,7 +163,7 @@ log4j.logger.java.sql.PreparedStatement=DEBUG
 
 - MyBatis基于注解开发的步骤和基于XML开发的不同：
  - **不需要映射配置文件**
- - **主配置文件`SqlMapConfig.xml`中的`<mapper>`里应配置`class`属性**而不是`resource`属性，如：
+ - **主配置文件`sqlMapConfig.xml`中的`<mapper>`里应配置`class`属性**而不是`resource`属性，如：
 ```
     <!-- 指定映射配置文件的位置，映射配置文件指的是每个DAO独立的配置文件
 		 若是基于注解来配置，则应使用class属性指定DAO接口的全限定类名 -->
@@ -219,7 +219,7 @@ public class MyBatisTest2 {
      */
     @Before // 在测试方法执行前调用该方法
     public void init() throws IOException {
-        in = Resources.getResourceAsStream("SqlMapConfig.xml");
+        in = Resources.getResourceAsStream("sqlMapConfig.xml");
         SqlSessionFactory factory = new SqlSessionFactoryBuilder().build(in);
         session = factory.openSession();
 		userDao = session.getMapper(UserDaoInterf.class);
@@ -547,7 +547,7 @@ parameterType属性既可以是`java.lang.Integer`，也可以是`int`或`Intege
 #### `<typeAlias>`标签和`<package>`标签 ####
 
 - 在映射配置文件中，resultType和parameterType属性，若是自定义的类，都必须写全限定类名，而int、String等类则不用，且不区分大小写，这是因为它们配置了别名
-- 我们也**可以在主配置文件SqlMapConfig.xml的`<configuartion>`标签中通过`<typeAliases>`和`<typeAlias>`标签给自定义类配置别名**，起到简化代码的作用，**配置别名后映射配置文件的resultType和parameterType属性就可以直接写该类的别名，而不用再写包名，且不区分大小写**，例如：
+- 我们也**可以在主配置文件sqlMapConfig.xml的`<configuartion>`标签中通过`<typeAliases>`和`<typeAlias>`标签给自定义类配置别名**，起到简化代码的作用，**配置别名后映射配置文件的resultType和parameterType属性就可以直接写该类的别名，而不用再写包名，且不区分大小写**，例如：
 ```
 <configuration>
 	...
@@ -556,7 +556,7 @@ parameterType属性既可以是`java.lang.Integer`，也可以是`int`或`Intege
 	</typeAliases>
 </configuration>
 ```
-- **若实体类比较多，也可以在主配置文件SqlMapConfig.xml的`<configuartion>`标签中通过`<typeAliases>`和`<package>`标签给domain包中的所有类同时配置别名**，例如:
+- **若实体类比较多，也可以在主配置文件sqlMapConfig.xml的`<configuartion>`标签中通过`<typeAliases>`和`<package>`标签给domain包中的所有类同时配置别名**，例如:
 ```
 <configuration>
 	...
@@ -565,7 +565,7 @@ parameterType属性既可以是`java.lang.Integer`，也可以是`int`或`Intege
 	</typeAliases>
 </configuration>
 ```
-- **DAO接口较多时，在主配置文件SqlMapConfig.xml中配置映射配置文件的位置时，也可以在`<mappers>`标签中直接通过`<package>`标签指定DAO所在的包，进而可以自动找到映射配置文件位置，不用再写`<mapper>`标签**，例如：
+- **DAO接口较多时，在主配置文件sqlMapConfig.xml中配置映射配置文件的位置时，也可以在`<mappers>`标签中直接通过`<package>`标签指定DAO所在的包，进而可以自动找到映射配置文件位置，不用再写`<mapper>`标签**，例如：
 ```
 <mappers>
 	<package name="pers.cris.dao"/>	<!-- 该包下所有DAO都不需要再写mapper指定映射配置文件位置或全限定类名 -->
@@ -573,7 +573,7 @@ parameterType属性既可以是`java.lang.Integer`，也可以是`int`或`Intege
 ```
 ---
 
-- 在主配置文件SqlMapConfig.xml中，可以引入外部配置文件来设置JDBC四大参数：
+- 在主配置文件sqlMapConfig.xml中，可以引入外部配置文件来设置JDBC四大参数：
  - 资源路径（Resource目录）下的jdbcConfig.properties中的内容：
 ```
 driver = com.mysql.jdbc.Driver
@@ -581,7 +581,7 @@ url = jdbc:mysql://localhost:3306/mybatisdb?serverTimezone=Asia/Shanghai
 username = Cris
 password = 123
 ```
- - 主配置文件件SqlMapConfig.xml中的内容：
+ - 主配置文件sqlMapConfig.xml中的内容：
 ```
 <configuration>
     <!-- 引入外部配置文件 -->
@@ -617,7 +617,7 @@ password = 123
 ### MyBatis中的连接池 ###
 
 - 实际开发中都会使用数据库连接池，因为它可以减少获取数据库连接的时间
-- MyBatis中提供了三种配置连接池的方式，可以在主配置文件SqlMapConfig.xml的`<dataSource>`标签中的type属性进行配置：
+- MyBatis中提供了三种配置连接池的方式，可以在主配置文件sqlMapConfig.xml的`<dataSource>`标签中的type属性进行配置：
  - `<dataSource type="POOLED">...</dataSource>`：使用javax.sql.DataSource规范的连接池
  - `<dataSource type="UNPOOLED">...</dataSource>`：不使用连接池
  - `<dataSource type="JNDI">...</dataSource>`：使用服务器提供的JNDI技术实现连接池，来获取DataSource对象，不同的服务器拿到的DataSource对象不同，例如Tomcat拿到的是dbcp连接池
@@ -646,7 +646,7 @@ password = 123
      */
     @Test
     public void testAutoCommit() throws IOException {
-        InputStream in = Resources.getResourceAsStream("SqlMapConfig.xml");
+        InputStream in = Resources.getResourceAsStream("sqlMapConfig.xml");
         SqlSessionFactory factory = new SqlSessionFactoryBuilder().build(in);
 
         SqlSession session = factory.openSession(true); // 设置自动提交事务
@@ -772,7 +772,7 @@ password = 123
 
 #### 抽取重复的SQL语句 ####
 
-- 主配置文件SqlMapConfig.xml中，**可以用`<sql>`标签抽取SQL语句的共有部分，再用`<include>`标签进行引用**，例如有许多方法的SQL语句开头都是`SELECT * FROM users`，就可以将其抽取出来，以后要修改表名等，较为方便：
+- 主配置文件sqlMapConfig.xml中，**可以用`<sql>`标签抽取SQL语句的共有部分，再用`<include>`标签进行引用**，例如有许多方法的SQL语句开头都是`SELECT * FROM users`，就可以将其抽取出来，以后要修改表名等，较为方便：
 ```
 <mapper namespace="pers.cris.dao.UserDaoInterf">    <!-- namespace是该接口的全限定类名 -->
     <!-- 抽取重复的SQL语句，id属性为其唯一标识 -->
@@ -1003,7 +1003,7 @@ password = 123
 
 - 在查询账户Account时先不查询其用户User的信息，而是在调用某个Account的方法时才查询它的User信息：
  1. Mybatis-3.4.6.jar包换成最新的Mybatis-3.5.1.jar
- 2. 在主配置文件SqlMapConfig.xml中添加配置：
+ 2. 在主配置文件sqlMapConfig.xml中添加配置：
 ```
 <configuration>
     <!-- 配置延迟加载策略 -->
@@ -1041,7 +1041,7 @@ password = 123
 
 - 在查询用户User时先不查询其账户集合List&lt;Account&gt;，而是在调用某个User的方法时才查询其List&lt;Account&gt;的信息：
  1. Mybatis-3.4.6.jar包换成最新的Mybatis-3.5.1.jar
- 2. 在主配置文件SqlMapConfig.xml中添加配置：
+ 2. 在主配置文件sqlMapConfig.xml中添加配置：
 ```
 <configuration>
     <!-- 配置延迟加载策略 -->
@@ -1123,7 +1123,7 @@ password = 123
      */
     @Test
     public void testFirstLevelCache2() throws IOException {
-        InputStream in = Resources.getResourceAsStream("SqlMapConfig.xml");
+        InputStream in = Resources.getResourceAsStream("sqlMapConfig.xml");
         SqlSessionFactory factory = new SqlSessionFactoryBuilder().build(in);
 
         SqlSession session1 = factory.openSession();
@@ -1151,7 +1151,7 @@ password = 123
 
 - **MyBatis的二级缓存：SqlSessionFactory中的缓存**，同一个SqlSessionFactory创建出来的SqlSession共享一个缓存区域，**但二级缓存中存储的不是对象，而会将对象进行序列化，再次查询时会重新组装一个对象返回（仍然不用查询数据库）**
 - 开启MyBatis二级缓存：
- 1. 配置主配置文件SqlMapConfig.xml使得MyBatis框架开启二级缓存：
+ 1. 配置主配置文件sqlMapConfig.xml使得MyBatis框架开启二级缓存：
 ```
 <configuration>
     <!-- 配置MyBatis框架开启二级缓存 -->
@@ -1180,7 +1180,7 @@ password = 123
      */
     @Test
     public void testSecondLevelCache() throws IOException {
-        InputStream in = Resources.getResourceAsStream("SqlMapConfig.xml");
+        InputStream in = Resources.getResourceAsStream("sqlMapConfig.xml");
         SqlSessionFactory factory = new SqlSessionFactoryBuilder().build(in);
 
         SqlSession session1 = factory.openSession();
@@ -1208,7 +1208,7 @@ password = 123
 
 ###### 属性名与数据库中的列名一致的User类  ######
 
-- 主配置文件SqlMapConfig.xml中配置映射信息：
+- 主配置文件sqlMapConfig.xml中配置映射信息：
 ```
 <configuration>
 	...
@@ -1352,7 +1352,7 @@ public interface IUserDao {
  - **`@Results`注解：相当于`<resultMap>`标签，用于封装一组映射关系，id属性是其唯一标识**
  - ** `@Result`注解：相当于`<id>`标签或`<result>`标签，指定一个`column`属性和一个`property`属性，来实现一对映射关系，并用`id`属性指明这对映射是否为主键**
  - **`@ResultMap`注解：相当于配置XML的SQL语句时的`resultMap`属性，用于引用定义过的映射关系**
-- 主配置文件SqlMapConfig.xml中配置映射信息：
+- 主配置文件sqlMapConfig.xml中配置映射信息：
 ```
 <configuration>
 	...
@@ -1498,8 +1498,8 @@ public interface IStuDao {
 #### MyBatis基于注解开发的缓存 ####
 
 - 一级缓存没什么可说的，和基于XML一样
-- **MyBatis**基于XML开发时，开启**二级缓存**需要在主配置文件SqlMapConfig.xml、映射配置文件、相应的方法标签中配置，但**基于注解开发时，没有映射配置文件，也没有相应的方法标签**
- - 主配置文件SqlMapConfig.xml中开启二级缓存的配置和基于XML开发时一样：
+- **MyBatis**基于XML开发时，开启**二级缓存**需要在主配置文件sqlMapConfig.xml、映射配置文件、相应的方法标签中配置，但**基于注解开发时，没有映射配置文件，也没有相应的方法标签**
+ - 主配置文件sqlMapConfig.xml中开启二级缓存的配置和基于XML开发时一样：
 ```
 <configuration>
     <settings>
@@ -1522,7 +1522,7 @@ public interface IUserDao {
      */
     @Test
     public void testSecondLevelCache() throws IOException {
-        InputStream in = Resources.getResourceAsStream("SqlMapConfig.xml");
+        InputStream in = Resources.getResourceAsStream("sqlMapConfig.xml");
         SqlSessionFactory factory = new SqlSessionFactoryBuilder().build(in);
 
         SqlSession session1 = factory.openSession();
